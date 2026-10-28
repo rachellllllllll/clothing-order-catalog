@@ -20,7 +20,7 @@ export async function loadLocalFolder(files: File[]): Promise<CatalogSource> {
     kind: 'local',
     excelName: excel.name,
     excelData: await excel.arrayBuffer(),
-    version: 'local:' + excel.name + ':' + excel.lastModified,
+    catalogKey: 'local:' + excel.name,
     images,
     dispose: () => urls.forEach((u) => URL.revokeObjectURL(u)),
   };

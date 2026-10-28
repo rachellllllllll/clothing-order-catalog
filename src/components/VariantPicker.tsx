@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import { activeVariantIndex, isSizeAvailable, qtyOf, variantUnits } from '../lib/catalog/selectors';
 import { toMoney } from '../lib/catalog/text';
 import type { CatalogItem, ModelGroup, QtyMap, SizeColumn } from '../lib/catalog/types';
-import { useOrderStore } from '../store/orderStore';
+import { isReadOnly, useOrderStore } from '../store/orderStore';
 
 const NO_SIZES: SizeColumn[] = [];
 
@@ -21,18 +22,20 @@ export function VariantPicker({ group, qty }: Props) {
     <>
       {multiColor && (
         <div className="color-tabs">
-          {group.variants.map((v, i) => (
-            <button
-              key={v.id}
-              type="button"
-              className={
-                'color-tab' + (i === active ? ' active' : '') + (variantUnits(qty, v) > 0 ? ' tab-has-qty' : '')
-              }
-              onClick={() => setActiveColor(group.key, i)}
-            >
-              {v.color || 'ללא צבע'}
-            </button>
-          ))}
+          {group.variants.map((v, i) => {
+            const units = variantUnits(qty, v);
+            return (
+              <button
+                key={v.id}
+                type="button"
+                className={'color-tab' + (i === active ? ' active' : '') + (units > 0 ? ' tab-has-qty' : '')}
+                onClick={() => setActiveColor(group.key, i)}
+              >
+                {v.color || 'ללא צבע'}
+                {units > 0 && <span className="tab-qty">{units}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
       <VariantPanel item={group.variants[active]} qty={qty} showColor={!multiColor} />
@@ -43,6 +46,8 @@ export function VariantPicker({ group, qty }: Props) {
 function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap; showColor: boolean }) {
   const sizeCols = useOrderStore((s) => s.catalog?.columns.sizeCols ?? NO_SIZES);
   const changeQty = useOrderStore((s) => s.changeQty);
+  const setQty = useOrderStore((s) => s.setQty);
+  const readOnly = useOrderStore(isReadOnly);
 
   return (
     <div className="variant">
@@ -67,11 +72,21 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
             >
               <div className="label">{label}</div>
               <div className="counter">
-                <button type="button" aria-label={`הפחת ${label}`} onClick={() => changeQty(item.id, label, -1)}>
+                <button
+                  type="button"
+                  aria-label={`הפחת ${label}`}
+                  disabled={readOnly}
+                  onClick={() => changeQty(item.id, label, -1)}
+                >
                   -
                 </button>
-                <span className="qty">{q}</span>
-                <button type="button" aria-label={`הוסף ${label}`} onClick={() => changeQty(item.id, label, 1)}>
+                <QtyInput label={label} value={q} readOnly={readOnly} onChange={(n) => setQty(item.id, label, n)} />
+                <button
+                  type="button"
+                  aria-label={`הוסף ${label}`}
+                  disabled={readOnly}
+                  onClick={() => changeQty(item.id, label, 1)}
+                >
                   +
                 </button>
               </div>
@@ -80,5 +95,41 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
         })}
       </div>
     </div>
+  );
+}
+
+/** Quantity field that accepts typed digits; an empty field counts as 0 and shows the stored value on blur. */
+function QtyInput({
+  label,
+  value,
+  readOnly,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  readOnly: boolean;
+  onChange: (n: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  return (
+    <input
+      className="qty"
+      type="text"
+      inputMode="numeric"
+      aria-label={`כמות ${label}`}
+      readOnly={readOnly}
+      value={draft ?? String(value)}
+      onFocus={(e) => e.target.select()}
+      onChange={(e) => {
+        const digits = e.target.value.replace(/\D/g, '').slice(0, 4);
+        setDraft(digits);
+        onChange(digits === '' ? 0 : Number(digits));
+      }}
+      onBlur={() => setDraft(null)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+      }}
+    />
   );
 }

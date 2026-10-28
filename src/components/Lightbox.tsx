@@ -95,9 +95,7 @@ function LightboxView({
       <div className="lightbox-stage">
         <div className="lightbox-image-wrap" ref={wrapRef}>
           {multi && (
-            <button type="button" className="lightbox-nav lightbox-prev" aria-label="הקודם" onClick={() => stepLightbox(-1)}>
-              ‹
-            </button>
+            <button type="button" className="lightbox-nav lightbox-prev" aria-label="הקודם" onClick={() => stepLightbox(-1)} />
           )}
           <img
             ref={imgRef}
@@ -110,9 +108,7 @@ function LightboxView({
           {showFallback && <div className="lightbox-image-fallback">לא נמצאה תמונה לדגם זה</div>}
           {!showFallback && <div className="lightbox-zoom-hint">גלגלת להגדלה · גרירה להזזה · דאבל-קליק לאיפוס</div>}
           {multi && (
-            <button type="button" className="lightbox-nav lightbox-next" aria-label="הבא" onClick={() => stepLightbox(1)}>
-              ›
-            </button>
+            <button type="button" className="lightbox-nav lightbox-next" aria-label="הבא" onClick={() => stepLightbox(1)} />
           )}
         </div>
         <div className="lightbox-actions">

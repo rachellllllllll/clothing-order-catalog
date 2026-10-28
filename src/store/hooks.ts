@@ -22,7 +22,7 @@ export function useImage(modelKey: string): ImageRef | undefined {
 }
 
 export function useVisibleGroups(): ModelGroup[] {
-  const { catalog, qty, search, sort, sizeFilter, sizeFilterMode } = useOrderStore(
+  const { catalog, qty, search, sort, sizeFilter, sizeFilterMode, onlyOrdered } = useOrderStore(
     useShallow((s) => ({
       catalog: s.catalog,
       qty: s.qty,
@@ -30,10 +30,12 @@ export function useVisibleGroups(): ModelGroup[] {
       sort: s.sort,
       sizeFilter: s.sizeFilter,
       sizeFilterMode: s.sizeFilterMode,
+      onlyOrdered: s.onlyOrdered,
     })),
   );
   return useMemo(
-    () => (catalog ? filterGroups(catalog.groups, qty, { search, sort, sizeFilter, sizeFilterMode }) : []),
-    [catalog, qty, search, sort, sizeFilter, sizeFilterMode],
+    () =>
+      catalog ? filterGroups(catalog.groups, qty, { search, sort, sizeFilter, sizeFilterMode, onlyOrdered }) : [],
+    [catalog, qty, search, sort, sizeFilter, sizeFilterMode, onlyOrdered],
   );
 }

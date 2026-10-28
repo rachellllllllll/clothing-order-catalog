@@ -1,0 +1,163 @@
+/* ── Admin page (/admin) ── */
+.admin .panel { margin-bottom: 12px; }
+
+.admin-home-link { margin-inline-start: auto; font-size: 14px; }
+
+.admin-status,
+.admin-main {
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin h3 { margin: 0; font-size: 16px; }
+
+.admin-actions { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+
+/* ── Status bar: round state, next step, KPIs ── */
+.admin-status-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.admin-status-actions { margin-inline-start: auto; gap: 6px; }
+
+.admin-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.admin-kpi {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+  text-align: start;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f8fafc;
+  color: var(--text);
+  font-weight: 400;
+}
+.admin-kpi:hover { border-color: var(--accent); }
+.admin-kpi[aria-pressed="true"] { border-color: var(--accent); background: var(--chip); box-shadow: inset 0 0 0 1px var(--accent); }
+.admin-kpi .t { font-size: 12px; color: var(--muted); }
+.admin-kpi .v { font-size: 18px; font-weight: 700; }
+.admin-kpi.warn .v { color: var(--warn); }
+
+/* ── Toolbar: tabs, version, search, actions ── */
+.admin-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.admin-toolbar-end { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-inline-start: auto; }
+
+.admin-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.admin-seg button {
+  border: 0;
+  border-radius: 0;
+  padding: 6px 12px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--text);
+}
+.admin-seg button + button { border-inline-start: 1px solid var(--line); }
+.admin-seg button[aria-selected="true"],
+.admin-seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+
+.admin-search {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.admin-filter-note { display: flex; align-items: center; gap: 6px; }
+
+/* ── Tables ── */
+.admin-table-wrap { overflow-x: auto; }
+
+.admin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.admin-table th,
+.admin-table td { padding: 7px 6px; border-bottom: 1px solid var(--line); text-align: start; vertical-align: top; }
+.admin-table th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+.admin-table .num { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.admin-table .strong { font-weight: 700; }
+.admin-table tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; }
+
+.admin-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+.admin-chip { margin-inline-start: 6px; font-size: 11px; }
+
+.admin .small { font-size: 12px; }
+
+/* ── By-product view ── */
+.admin-products { display: grid; gap: 8px; min-width: 0; }
+
+.admin-prod-table td { vertical-align: middle; }
+.admin-prod-table .admin-prod-item {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  background: var(--panel);
+  min-width: 170px;
+}
+.admin-table tr.open > td { background: #f8fafc; }
+
+.admin-prod-cell { display: flex; align-items: center; gap: 8px; }
+
+.admin-thumb-btn { padding: 0; border: 0; background: none; line-height: 0; cursor: zoom-in; flex: none; }
+.admin-thumb-btn:hover .admin-thumb { border-color: var(--accent); }
+
+.admin-image-stage { grid-template-rows: minmax(280px, 1fr) auto; }
+
+/* ── Order detail under an orderer row ── */
+.admin-name-btn { width: auto; gap: 6px; }
+.admin-name-btn .admin-caret { margin: 0; }
+.admin-detail { display: grid; gap: 6px; padding-inline-start: 22px; }
+.admin-sub-table { width: auto; min-width: min(560px, 100%); font-size: 13px; background: #fff; }
+.admin-sub-table th,
+.admin-sub-table td { padding: 4px 8px; vertical-align: middle; }
+.admin-sub-table .admin-thumb { width: 28px; height: 28px; }
+.admin-sub-table tr.diff > td { background: #fff9db; }
+.admin-sub-table tfoot td { font-weight: 700; }
+
+.admin-prod-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-weight: 600;
+  text-align: start;
+}
+.admin-prod-btn:disabled { cursor: default; opacity: 1; }
+.admin-caret { margin-inline-start: auto; color: var(--muted); }
+
+.admin-thumb { width: 36px; height: 36px; flex: none; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: #fff; }
+.admin-thumb-empty { display: block; background: #f1f3f5; }
+
+.admin-size { min-width: 34px; }
+.admin-size.focus { background: var(--chip) !important; }
+.admin-size-btn {
+  padding: 2px 6px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline dotted;
+}
+
+.admin-who-row > td { padding-top: 0; }
+.admin-who { margin: 0; padding-inline-start: 52px; list-style: none; display: grid; gap: 3px; font-size: 13px; }
+.admin-who li.focus { background: var(--chip); border-radius: 6px; padding: 1px 6px; margin-inline-start: -6px; }
+
+/* Half a desktop screen: drop the "updated" column and let the toolbar wrap. */
+@media (max-width: 900px) {
+  .admin .app-header h1 { font-size: 18px; }
+  .admin-toolbar-end { margin-inline-start: 0; }
+  .admin-search { max-width: none; }
+  .admin-col-updated { display: none; }
+}

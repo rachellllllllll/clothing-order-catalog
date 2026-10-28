@@ -2,7 +2,6 @@ import { toMoney } from '../lib/catalog/text';
 import { loadLocalFolder } from '../lib/source/localFolder';
 import { useCart, useExportOrder } from '../store/cartHooks';
 import { useOrderStore } from '../store/orderStore';
-import { FilterBar } from './FilterBar';
 
 interface Props {
   allowLocalFolder: boolean;
@@ -50,7 +49,7 @@ export function ControlsPanel({ allowLocalFolder }: Props) {
             <input
               id="signerInput"
               type="text"
-              placeholder="למשל: רונית ד"
+              placeholder="למשל: כהן"
               value={signer}
               onChange={(e) => setSigner(e.target.value)}
             />
@@ -91,8 +90,6 @@ export function ControlsPanel({ allowLocalFolder }: Props) {
           <div className="v danger">{totals.unpricedUnits}</div>
         </div>
       </div>
-
-      {modelsCount > 0 && <FilterBar />}
     </section>
   );
 }

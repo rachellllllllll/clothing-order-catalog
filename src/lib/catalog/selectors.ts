@@ -32,6 +32,7 @@ export interface GroupFilter {
   sort: SortMode;
   sizeFilter: readonly string[];
   sizeFilterMode: SizeFilterMode;
+  onlyOrdered: boolean;
 }
 
 function minPrice(g: ModelGroup, fallback: number): number {
@@ -41,6 +42,8 @@ function minPrice(g: ModelGroup, fallback: number): number {
 export function filterGroups(groups: ModelGroup[], qty: QtyMap, f: GroupFilter): ModelGroup[] {
   const q = f.search.trim().toLowerCase();
   let out = groups;
+
+  if (f.onlyOrdered) out = out.filter((g) => groupUnits(qty, g) > 0);
 
   if (q) {
     out = out.filter(

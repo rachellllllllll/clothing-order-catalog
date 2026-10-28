@@ -1,4 +1,5 @@
 import type { CellValue, SheetGrid } from '../xlsx/xlsx';
+import { itemKey } from './draft';
 import { computeAvailableSizes, isSizeHeader } from './sizes';
 import { normalizeHeader, normalizeText, safeText } from './text';
 import type { Catalog, CatalogItem, Columns, ModelGroup, SizeColumn } from './types';
@@ -94,6 +95,7 @@ export function parseCatalog(grid: SheetGrid): Catalog {
   const { modelCol, priceCol, colorCol, notesCol, sizeRangeCol, sizeCols } = columns;
 
   const items: CatalogItem[] = [];
+  const seenKeys = new Map<string, number>();
   for (let r = headerRow + 1; r <= grid.maxRow; r += 1) {
     const model = safeText(grid.get(r, modelCol));
     if (!model) continue;
@@ -120,8 +122,13 @@ export function parseCatalog(grid: SheetGrid): Catalog {
       }
     }
 
+    // A repeated model + color (a data error in the file) still needs a unique id.
+    const key = itemKey(model, color);
+    const seen = (seenKeys.get(key) ?? 0) + 1;
+    seenKeys.set(key, seen);
+
     items.push({
-      id: r + '_' + normalizeText(model) + '_' + normalizeText(color),
+      id: seen === 1 ? key : key + '#' + seen,
       model,
       modelKey: normalizeText(model),
       price: parsePrice(grid.get(r, priceCol)),

@@ -2,7 +2,7 @@
 .fab-cart {
   position: fixed;
   bottom: 24px;
-  left: 24px;
+  right: 24px;
   width: 60px;
   height: 60px;
   border-radius: 50%;
@@ -16,12 +16,44 @@
   justify-content: center;
   z-index: 100;
   padding: 0;
+  transition: box-shadow 0.3s;
 }
+
+.fab-cart.fab-flash {
+  box-shadow: 0 0 0 4px #69db7c, 0 0 0 7px #d3f9d8, 0 4px 20px rgba(0, 0, 0, 0.28);
+}
+
+/* ── "Saved on this device" pill next to the FAB ── */
+@keyframes savePulse {
+  from { background: #d3f9d8; }
+  to { background: #fff; }
+}
+
+.save-indicator {
+  position: fixed;
+  bottom: 42px;
+  right: 94px;
+  z-index: 100;
+  padding: 4px 10px;
+  border: 1px solid #b2f2bb;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ok);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: savePulse 1.2s ease-out;
+}
+
+.save-indicator.save-failed { border-color: #ffc9c9; color: #c92a2a; animation: none; }
+
+.save-indicator.save-busy { border-color: var(--line); color: var(--muted); animation: none; }
+
+.save-ok { color: var(--ok); }
 
 .fab-badge {
   position: absolute;
   top: -2px;
-  right: -2px;
+  left: -2px;
   background: var(--accent2);
   color: #1a2938;
   border-radius: 999px;
@@ -35,6 +67,39 @@
   padding: 0 4px;
   border: 2px solid #fff;
 }
+
+/* ── Undo toast ── */
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 700;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px 10px 10px;
+  border-radius: 10px;
+  background: #1a2938;
+  color: #fff;
+  font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+  animation: toastIn 0.18s ease-out;
+}
+
+.toast-undo {
+  background: transparent;
+  border: 1px solid #99e9f2;
+  color: #99e9f2;
+  padding: 4px 12px;
+}
+
+.toast-undo:hover { background: rgba(153, 233, 242, 0.12); }
 
 /* ── Cart modal ── */
 .cart-modal-overlay {

@@ -28,7 +28,7 @@ body.no-scroll { overflow: hidden; }
 .wrap {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px 16px 100px;
   display: grid;
   gap: 12px;
 }
