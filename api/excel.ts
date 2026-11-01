@@ -1,4 +1,4 @@
-import { downloadExcel, errorResponse, findRound, listFolder, pickExcel, XLSX_MIME } from './_drive.js';
+import { downloadExcel, errorResponse, findDriveRound, listFolder, pickExcel, XLSX_MIME } from './_drive.js';
 
 /**
  * GET /api/excel?round=<folderId>&v=<modifiedTime> → the round's catalog Excel file.
@@ -8,7 +8,7 @@ import { downloadExcel, errorResponse, findRound, listFolder, pickExcel, XLSX_MI
  */
 export async function GET(request: Request): Promise<Response> {
   try {
-    const round = await findRound(new URL(request.url).searchParams.get('round'));
+    const round = await findDriveRound(new URL(request.url).searchParams.get('round'));
     const excel = pickExcel(await listFolder(round.id));
     const data = await downloadExcel(excel);
     return new Response(data, {

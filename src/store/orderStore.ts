@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OrderDto, OrderLine, SubmittedDto } from '../../api/_types';
+import type { OrderDto, OrderLine, ShortageLine, SubmittedDto } from '../../api/_types';
 import { catalogFileLines, linesToQty, parseDraft, qtyToLines, type Draft, type DraftLine } from '../lib/catalog/draft';
 import { parseCatalog } from '../lib/catalog/parseCatalog';
 import { filterGroups } from '../lib/catalog/selectors';
@@ -47,7 +47,7 @@ export interface SaveState {
   failed: boolean;
 }
 
-/** The orderer signed in to the open Drive round (name + PIN). */
+/** A sign-in: to the site (`member`, name + code) or to the order in the open Drive round (`account`). */
 export interface Account {
   name: string;
   token: string;
@@ -106,13 +106,18 @@ interface OrderState {
   resumeNotice: ResumeNotice | null;
   missingNotice: MissingNotice | null;
   save: SaveState;
+  /** Signed in with name + code (asked before the rounds are shown); kept on this device. */
+  member: Account | null;
+  /** The member's order in the open round (opened with the `member` token). */
   account: Account | null;
-  /** True while a saved session is being checked after opening a round. */
+  /** True while the member's order in the open round is being opened. */
   authPending: boolean;
-  /** Message for the sign-in panel (e.g. "session expired"). */
+  /** Message for the sign-in panel (e.g. "session expired") or why the order could not be opened. */
   authNotice: string | null;
   sync: SyncState;
   conflict: Conflict | null;
+  /** Units of the signed-in order that did not arrive from the supplier (closed rounds, marked by the admin). */
+  shortages: ShortageLine[];
 
   setStatus(message: string, isError?: boolean, file?: Pick<Status, 'fileName' | 'after'>): void;
   loadSource(loader: () => Promise<CatalogSource>): Promise<boolean>;
@@ -247,11 +252,13 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
   resumeNotice: null,
   missingNotice: null,
   save: { savedAt: null, failed: false },
+  member: null,
   account: null,
   authPending: false,
   authNotice: null,
   sync: INITIAL_SYNC,
   conflict: null,
+  shortages: [],
 
   setStatus: (message, isError = false, file) => set({ status: { message, isError, ...file } }),
 
@@ -259,7 +266,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
     set({ loading: true });
     try {
       const source = await loader();
-      const catalog = parseCatalog(await readFirstSheet(source.excelData));
+      const catalog = source.catalog;
       get().source?.dispose();
 
       const firstSignature = catalog.items.find((it) => it.signature)?.signature ?? '';
@@ -279,6 +286,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
         authNotice: null,
         sync: INITIAL_SYNC,
         conflict: null,
+        shortages: [],
         activeColorByModel: {},
         sizeFilter: [],
         sizeFilterMode: 'any',
@@ -346,6 +354,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
       authNotice: null,
       sync: INITIAL_SYNC,
       conflict: null,
+      shortages: [],
       status: { message: '', isError: false },
     });
   },

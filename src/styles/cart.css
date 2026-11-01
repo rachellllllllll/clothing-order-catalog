@@ -193,3 +193,7 @@
 }
 
 .row-price { margin-right: auto; color: var(--muted); font-size: 12px; }
+
+.cart-group-row.short { background: #fff1f0; }
+.chip.chip-short { background: #ffe3e0; color: var(--warn); }
+.row-price-was { margin-inline-start: 6px; color: var(--muted); font-size: 11px; }

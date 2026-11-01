@@ -24,7 +24,19 @@ function apiDevServer(): Plugin {
         const { FakeDrive, installFakeFetch, seedFakeDrive, seedSampleOrders } = await server.ssrLoadModule('/dev/fakeDrive.ts');
         const drive = new FakeDrive();
         installFakeFetch(drive);
-        seedSampleOrders(drive, await seedFakeDrive(drive));
+        await seedSampleOrders(drive, await seedFakeDrive(drive));
+        // Images uploaded on the admin page are served from memory (instead of Drive thumbnail links).
+        process.env.FAKE_IMAGE_BASE = '/__fake-drive/';
+        server.middlewares.use('/__fake-drive/', (req: IncomingMessage, res: ServerResponse) => {
+          const file = drive.files.get(decodeURIComponent((req.url ?? '').replace(/^\//, '')));
+          if (!file?.content || drive.isTrashed(file)) {
+            res.statusCode = 404;
+            res.end();
+            return;
+          }
+          res.setHeader('content-type', file.mimeType);
+          res.end(Buffer.from(file.content));
+        });
         server.config.logger.info('  ➜  API: fake Drive (admin password: ' + process.env.ADMIN_PASSWORD + ')');
       }
 

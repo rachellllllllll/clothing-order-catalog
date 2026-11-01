@@ -6,9 +6,9 @@ interface RoundChooserProps {
   rounds: Round[];
   disabled?: boolean;
   onSelect: (round: Round) => void;
-  /** Extra line on a round's card (e.g. who is signed in to it). */
-  detail?: (round: Round) => ReactNode;
   archiveTitle?: string;
+  /** Admin page: a "new round" card first in the list. */
+  onCreate?: () => void;
   /** Shown under the cards (loading / errors). */
   children?: ReactNode;
 }
@@ -18,14 +18,15 @@ export function RoundChooser({
   rounds,
   disabled,
   onSelect,
-  detail,
   archiveTitle = 'ארכיון (צפייה בלבד)',
+  onCreate,
   children,
 }: RoundChooserProps) {
   const active = rounds.filter((r) => !r.archived);
   const archived = rounds.filter((r) => r.archived);
-  const list = (items: Round[]) => (
+  const list = (items: Round[], first?: ReactNode) => (
     <div className="round-list">
+      {first}
       {items.map((r) => (
         <button
           key={r.id}
@@ -36,19 +37,25 @@ export function RoundChooser({
         >
           <strong>
             <bdi>{r.name}</bdi>
+            {r.draft && <span className="chip chip-warn round-chip">טיוטה</span>}
             {r.locked && !r.archived && <span className="chip chip-warn round-chip">נעול</span>}
           </strong>
           <span className="muted">נפתח {formatSavedAt(r.createdTime)}</span>
-          {detail?.(r)}
         </button>
       ))}
     </div>
   );
+  const createCard = onCreate && (
+    <button type="button" className="round-card round-new" disabled={disabled} onClick={onCreate}>
+      <strong>+ סבב חדש</strong>
+      <span className="muted">קטלוג, תמונות, מחירים ומידות</span>
+    </button>
+  );
 
   return (
     <section className="panel round-picker">
-      <h2>בחרו סבב הזמנה</h2>
-      {active.length ? list(active) : <div className="muted">אין כרגע סבבים פתוחים.</div>}
+      <h2>{onCreate ? 'סבבי הזמנה' : 'בחרו סבב הזמנה'}</h2>
+      {active.length || createCard ? list(active, createCard) : <div className="muted">אין כרגע סבבים פתוחים.</div>}
       {archived.length > 0 && (
         <>
           <h3 className="round-archive-title">{archiveTitle}</h3>

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { activeVariantIndex, isSizeAvailable, qtyOf, variantUnits } from '../lib/catalog/selectors';
+import { missingQty, shortageIndex } from '../lib/catalog/shortages';
 import { toMoney } from '../lib/catalog/text';
 import type { CatalogItem, ModelGroup, QtyMap, SizeColumn } from '../lib/catalog/types';
 import { isReadOnly, useOrderStore } from '../store/orderStore';
@@ -48,6 +49,8 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
   const changeQty = useOrderStore((s) => s.changeQty);
   const setQty = useOrderStore((s) => s.setQty);
   const readOnly = useOrderStore(isReadOnly);
+  const shortages = useOrderStore((s) => s.shortages);
+  const shortIdx = useMemo(() => shortageIndex(shortages), [shortages]);
 
   return (
     <div className="variant">
@@ -65,6 +68,7 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
           const q = qtyOf(qty, item.id, label);
           const available = isSizeAvailable(item, label);
           if (!available && q <= 0) return null;
+          const missing = q > 0 ? missingQty(shortIdx, item.id, label, q) : 0;
           return (
             <div
               key={label}
@@ -90,6 +94,11 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
                   +
                 </button>
               </div>
+              {missing > 0 && (
+                <div className="size-short" title="לא הגיע מהספק — לא יחויב">
+                  {missing === q ? 'לא הגיע' : missing === 1 ? 'אחד לא הגיע' : `${missing} לא הגיעו`}
+                </div>
+              )}
             </div>
           );
         })}

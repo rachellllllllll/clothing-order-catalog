@@ -43,6 +43,11 @@ function config(): { key: string; folderId: string } {
   return { key, folderId };
 }
 
+/** False when only rounds created on the admin page are used (no shared catalog folder). */
+export function driveCatalogConfigured(): boolean {
+  return !!(process.env.GOOGLE_API_KEY && process.env.DRIVE_FOLDER_ID);
+}
+
 async function driveFetch(url: URL): Promise<Response> {
   const res = await fetch(url);
   if (!res.ok) {
@@ -78,13 +83,19 @@ export async function listRounds(): Promise<DriveFile[]> {
   return files.filter((f) => f.mimeType === FOLDER_MIME).sort((a, b) => b.createdTime.localeCompare(a.createdTime));
 }
 
+/** Checks the shape of a round id sent by the client (it ends up in Drive queries). */
+export function validRoundId(roundId: unknown): string {
+  if (typeof roundId !== 'string' || !/^[\w-]{10,100}$/.test(roundId)) throw new HttpError(400, 'Missing or invalid round.');
+  return roundId;
+}
+
 /**
- * Resolves a round id sent by the client. Only direct subfolders of the catalog folder are accepted,
+ * Resolves a round id of the shared catalog folder. Only its direct subfolders are accepted,
  * so these endpoints can't be used to read arbitrary Drive files.
  */
-export async function findRound(roundId: string | null): Promise<DriveFile> {
-  if (!roundId || !/^[\w-]{10,100}$/.test(roundId)) throw new HttpError(400, 'Missing or invalid round.');
-  const round = (await listRounds()).find((r) => r.id === roundId);
+export async function findDriveRound(roundId: string | null): Promise<DriveFile> {
+  const id = validRoundId(roundId);
+  const round = (await listRounds()).find((r) => r.id === id);
   if (!round) throw new HttpError(404, 'Order round not found.');
   return round;
 }

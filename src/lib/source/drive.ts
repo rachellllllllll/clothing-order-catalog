@@ -1,7 +1,12 @@
+import type { DocCatalogResponse } from '../../../api/_types';
+import { apiPost } from '../api/client';
+import { catalogFromDoc } from '../catalog/catalogDoc';
+import { parseCatalog } from '../catalog/parseCatalog';
 import { normalizeText } from '../catalog/text';
+import { readFirstSheet } from '../xlsx/xlsx';
 import type { CatalogSource, ImageRef, Round } from './types';
 
-/** Shape returned by /api/catalog (see api/catalog.ts). */
+/** Shape returned by /api/catalog (see api/catalog.ts) for a round folder with an Excel file. */
 export interface DriveCatalogResponse {
   round: { id: string; name: string };
   excel: { name: string; modifiedTime: string };
@@ -39,15 +44,41 @@ export async function loadDriveRounds(): Promise<Round[]> {
   return ((await res.json()) as { rounds: Round[] }).rounds;
 }
 
-export async function loadDriveCatalog(round: Round): Promise<CatalogSource> {
+/** A round edited on the admin page: the catalog is JSON, with one image per product. */
+export function docCatalogSource(data: DocCatalogResponse): CatalogSource {
+  const catalog = catalogFromDoc(data.catalog);
+  const images = new Map<string, ImageRef>();
+  for (const p of data.catalog.products) {
+    const urls = p.image ? data.images[p.image] : undefined;
+    if (urls && p.model.trim()) images.set(normalizeText(p.model), urls);
+  }
+  return {
+    kind: 'drive',
+    excelName: data.round.name,
+    excelData: null,
+    catalog,
+    catalogKey: driveCatalogKey(data.round.id),
+    images,
+    dispose: () => {},
+  };
+}
+
+/** `admin`: rounds edited on the admin page load uncached through the admin API (drafts included). */
+export async function loadDriveCatalog(round: Round, opts: { admin?: boolean } = {}): Promise<CatalogSource> {
+  if (round.editable && opts.admin) {
+    return docCatalogSource(await apiPost<DocCatalogResponse>('/api/admin', { action: 'catalog', round: round.id }));
+  }
   const roundParam = 'round=' + encodeURIComponent(round.id);
   const res = await fetch('/api/catalog?' + roundParam);
   if (!res.ok) throw new Error('טעינת הקטלוג נכשלה: ' + (await readError(res)));
 
-  const data = (await res.json()) as DriveCatalogResponse;
+  const body = (await res.json()) as DriveCatalogResponse | DocCatalogResponse;
+  if ('catalog' in body) return docCatalogSource(body);
+  const data = body;
 
   const excelRes = await fetch('/api/excel?' + roundParam + '&v=' + encodeURIComponent(data.excel.modifiedTime));
   if (!excelRes.ok) throw new Error('הורדת קובץ האקסל נכשלה: ' + (await readError(excelRes)));
+  const excelData = await excelRes.arrayBuffer();
 
   const images = new Map<string, ImageRef>();
   for (const img of data.images) {
@@ -60,7 +91,8 @@ export async function loadDriveCatalog(round: Round): Promise<CatalogSource> {
   return {
     kind: 'drive',
     excelName: data.excel.name,
-    excelData: await excelRes.arrayBuffer(),
+    excelData,
+    catalog: parseCatalog(await readFirstSheet(excelData)),
     catalogKey: driveCatalogKey(data.round.id),
     images,
     dispose: () => {},

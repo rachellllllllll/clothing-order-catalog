@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DraftLine } from '../lib/catalog/draft';
-import { formatSavedAt } from '../lib/catalog/text';
+import { formatSavedAt, notArrived, toMoney } from '../lib/catalog/text';
+import { useCart } from '../store/cartHooks';
 import { isReadOnly, useOrderStore, type MissingNotice } from '../store/orderStore';
 import { resolveConflict } from '../store/orderSync';
 
@@ -10,6 +11,7 @@ export function OrderNotices() {
   return (
     <>
       <ReadOnlyBanner />
+      <ShortageBanner />
       <ConflictBanner />
       <ResumeBanner />
       {missing && <MissingBanner key={missing.origin} notice={missing} />}
@@ -28,6 +30,41 @@ function ReadOnlyBanner() {
 }
 
 const unitsIn = (lines: readonly { qty: number }[]) => lines.reduce((s, l) => s + l.qty, 0);
+
+/** Units of the order that the admin marked as not delivered by the supplier — they are not charged. */
+function ShortageBanner() {
+  const { lines, totals } = useCart();
+  const [open, setOpen] = useState(false);
+  const short = lines.filter((l) => l.missing);
+  if (!short.length) return null;
+
+  return (
+    <div className="notice notice-warn" role="status">
+      <span>
+        {totals.missingUnits === 1
+          ? 'פריט אחד מההזמנה שלך לא הגיע מהספק ולא יחויב.'
+          : `${totals.missingUnits} פריטים מההזמנה שלך לא הגיעו מהספק ולא יחויבו.`}{' '}
+        סה״כ לתשלום: <bdi>{toMoney(totals.amount)}</bdi>
+      </span>
+      <div className="notice-actions">
+        <button type="button" className="btn-secondary btn-sm" aria-expanded={open} onClick={() => setOpen(!open)}>
+          {open ? 'הסתר' : 'הצג אילו'}
+        </button>
+      </div>
+      {open && (
+        <ul className="notice-list">
+          {short.map((l) => (
+            <li key={l.itemId + '|' + l.size}>
+              <bdi>{[l.model, l.color, 'מידה ' + l.size].filter(Boolean).join(' · ')}</bdi>
+              {' — '}
+              {l.missing! < l.qty ? `${notArrived(l.missing!)} (מתוך ${l.qty})` : l.qty === 1 ? 'לא הגיע' : 'כל היחידות לא הגיעו'}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function ConflictBanner() {
   const conflict = useOrderStore((s) => s.conflict);

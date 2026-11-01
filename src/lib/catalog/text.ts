@@ -15,8 +15,16 @@ export function normalizeHeader(v: unknown): string {
 
 export function toMoney(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return 'ללא מחיר';
-  return '$' + Number(v).toFixed(2);
+  return '$' + Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/** Units that did not arrive from the supplier, singular-aware: "יחידה אחת לא הגיעה" / "3 יח׳ לא הגיעו". */
+export function notArrived(n: number): string {
+  return n === 1 ? 'יחידה אחת לא הגיעה' : `${n} יח׳ לא הגיעו`;
+}
+
+/** A change in units with its sign: "+2" / "−1", isolated left-to-right so the sign stays in front in Hebrew text. */
+export const signed = (n: number) => '\u2066' + (n > 0 ? '+' : '−') + Math.abs(n) + '\u2069';
 
 /** "היום ב־14:32" for today, otherwise "ב־12.10" (with the year if it is not the current one). */
 export function formatSavedAt(iso: string, now = new Date()): string {

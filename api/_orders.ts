@@ -1,12 +1,13 @@
 /**
  * Orders stored in Drive:
  *   ORDERS_FOLDER_ID/                      (private, created by the setup script)
- *     <round name>/   appProperties { round: <catalog round folder id>, locked, archived }
- *       <orderer name>.json   appProperties = summary (see summaryProps) for cheap admin listing
+ *     מזמינים/        the orderers list (see _members.ts)
+ *     <round name>/   appProperties { round: <catalog round folder id>, locked, archived, shortages: <file id> }
+ *       <orderer name>.json   appProperties = summary (see summaryProps) + mid (member id) for cheap admin listing
+ *       shortages.json        appProperties { kind: 'shortages' } — units that did not arrive, per order file id
  */
-import { createHash } from 'node:crypto';
-import { checkPin, hashPin, signToken, verifyToken, bearerToken, type StoredPin } from './_auth.js';
-import { findRound, HttpError, type DriveFile } from './_drive.js';
+import { signToken, verifyToken, bearerToken } from './_auth.js';
+import { HttpError } from './_drive.js';
 import {
   createFolder,
   createJsonFile,
@@ -16,23 +17,32 @@ import {
   ordersRootId,
   q,
   readJson,
+  trashFile,
   updateJsonFile,
   updateProperties,
   type AppFile,
 } from './_google.js';
-import type { OrderDto, OrderLine, OrderResponse, OrderSummary, RoundState, SubmittedDto } from './_types.js';
+import { memberLogin, nameKey, sessionMember, sessionStamp, type StoredMember } from './_members.js';
+import { findAppRound, findRound, listAllRounds, type RoundRef } from './_rounds.js';
+import type {
+  OrderDto,
+  OrderLine,
+  OrderResponse,
+  OrderSummary,
+  RoundDto,
+  RoundState,
+  ShortageLine,
+  Shortages,
+  SigninResponse,
+  SubmittedDto,
+} from './_types.js';
 
 const MAX_LINES = 3000;
-const MAX_PIN_FAILS = 5;
-const PIN_LOCK_MS = 15 * 60 * 1000;
 const TOKEN_MS = 180 * 24 * 60 * 60 * 1000;
 
 interface StoredOrder {
   v: 1;
   name: string;
-  pin: StoredPin | null;
-  fails: number;
-  lockUntil: string | null;
   rev: number;
   createdAt: string;
   updatedAt: string;
@@ -46,23 +56,24 @@ interface OrderToken {
   r: string;
   /** Order file id. */
   f: string;
-  /** PIN salt prefix — a PIN reset changes the salt and so ends existing sessions. */
+  /** Member id. */
+  m: string;
+  /** Code salt prefix — a new code changes the salt and so ends existing sessions. */
+  p: string;
+  exp: number;
+}
+
+/** Sign-in to the site (before choosing a round); exchanged for an OrderToken per round with `open`. */
+interface MemberToken {
+  k: 'member';
+  /** Member id. */
+  m: string;
+  /** Code salt prefix (as in OrderToken). */
   p: string;
   exp: number;
 }
 
 // ── Validation ──
-
-export function parseName(raw: unknown): string {
-  const name = typeof raw === 'string' ? raw.normalize('NFC').replace(/\p{Cc}/gu, '').replace(/\s+/g, ' ').trim() : '';
-  if (name.length < 2 || name.length > 40) throw new HttpError(400, 'השם צריך להכיל 2–40 תווים.', 'bad_name');
-  return name;
-}
-
-/** Case/space-insensitive name identity, hashed so it is safe to put in Drive queries. */
-export function nameKey(name: string): string {
-  return createHash('sha256').update('name:' + name.toLowerCase()).digest('hex').slice(0, 32);
-}
 
 function str(v: unknown, max: number): string | null {
   return typeof v === 'string' && v.length <= max ? v : null;
@@ -95,9 +106,6 @@ function parseStored(raw: unknown): StoredOrder {
   return {
     v: 1,
     name: typeof o.name === 'string' ? o.name : '',
-    pin: o.pin && typeof o.pin.salt === 'string' && typeof o.pin.hash === 'string' ? o.pin : null,
-    fails: Number(o.fails) || 0,
-    lockUntil: typeof o.lockUntil === 'string' ? o.lockUntil : null,
     rev: Number(o.rev) || 0,
     createdAt: String(o.createdAt ?? ''),
     updatedAt: String(o.updatedAt ?? ''),
@@ -131,7 +139,6 @@ function summaryProps(o: StoredOrder): Record<string, string> {
     upd: o.updatedAt,
     sub: o.submitted?.at ?? '',
     srev: o.submitted ? String(o.submitted.rev) : '',
-    pin: o.pin ? '1' : '0',
   };
 }
 
@@ -145,7 +152,6 @@ function summaryOf(f: AppFile): OrderSummary {
     updatedAt: p.upd || f.modifiedTime,
     submittedAt: p.sub || null,
     submittedRev: p.srev ? Number(p.srev) : null,
-    hasPin: p.pin === '1',
   };
 }
 
@@ -163,7 +169,7 @@ async function findRoundFolder(roundId: string): Promise<AppFile | null> {
   return files[0] ?? null; // oldest wins if two requests ever created it at once
 }
 
-async function ensureRoundFolder(round: DriveFile): Promise<AppFile> {
+async function ensureRoundFolder(round: RoundRef): Promise<AppFile> {
   return (await findRoundFolder(round.id)) ?? createFolder(round.name, ordersRootId(), { round: round.id });
 }
 
@@ -179,17 +185,37 @@ export async function roundStates(): Promise<Map<string, RoundState>> {
   return map;
 }
 
+/** The rounds with their state, newest first. Drafts (rounds still being prepared) are for the admin only. */
+export async function listRoundDtos(includeDrafts: boolean): Promise<RoundDto[]> {
+  const [rounds, states] = await Promise.all([listAllRounds(includeDrafts), roundStates()]);
+  return rounds.map((r) => ({
+    id: r.id,
+    name: r.name,
+    createdTime: r.createdTime,
+    ...(states.get(r.id) ?? { locked: false, archived: false }),
+    ...(r.editable && { editable: true }),
+    ...(r.draft && { draft: true }),
+  }));
+}
+
 // ── Order files ──
 
 async function orderFiles(folderId: string): Promise<AppFile[]> {
   return findFiles(`${q(folderId)} in parents and trashed = false and appProperties has { key='kind' and value='order' }`);
 }
 
-async function findOrderFile(folderId: string, name: string): Promise<AppFile | null> {
-  const files = await findFiles(
-    `${q(folderId)} in parents and trashed = false and appProperties has { key='nk' and value=${q(nameKey(name))} }`,
+/** The member's order in the round folder. Orders from before the list are matched by name, then linked. */
+async function findMemberOrder(folderId: string, memberId: string, name: string): Promise<AppFile | null> {
+  const linked = await findFiles(
+    `${q(folderId)} in parents and trashed = false and appProperties has { key='mid' and value=${q(memberId)} }`,
   );
-  return files[0] ?? null;
+  if (linked[0]) return linked[0];
+  const byName = await findFiles(
+    `${q(folderId)} in parents and trashed = false and appProperties has { key='kind' and value='order' } and ` +
+      `appProperties has { key='nk' and value=${q(nameKey(name))} }`,
+  );
+  const legacy = byName.find((f) => !f.appProperties.mid);
+  return legacy ? updateProperties(legacy.id, { mid: memberId }) : null;
 }
 
 async function readOrder(fileId: string): Promise<StoredOrder> {
@@ -200,8 +226,8 @@ async function writeOrder(fileId: string, o: StoredOrder): Promise<void> {
   await updateJsonFile(fileId, summaryProps(o), o);
 }
 
-function issueToken(roundId: string, fileId: string, o: StoredOrder): string {
-  return signToken({ k: 'order', r: roundId, f: fileId, p: o.pin!.salt.slice(0, 8), exp: Date.now() + TOKEN_MS });
+function issueToken(roundId: string, fileId: string, memberId: string, m: StoredMember): string {
+  return signToken({ k: 'order', r: roundId, f: fileId, m: memberId, p: sessionStamp(m), exp: Date.now() + TOKEN_MS });
 }
 
 function lockedError(state: RoundState): HttpError {
@@ -215,95 +241,87 @@ function lockedError(state: RoundState): HttpError {
 
 // ── Orderer actions ──
 
-export async function login(roundId: unknown, name: string, pin: string, create: boolean): Promise<OrderResponse> {
-  const round = await findRound(typeof roundId === 'string' ? roundId : null);
+const sessionExpired = () => new HttpError(401, 'פג תוקף הכניסה — היכנסו שוב.', 'session_expired');
+
+/** Signs in a member of the orderers list (before choosing a round). */
+export async function signin(name: string, pin: string): Promise<SigninResponse> {
+  const { id, member } = await memberLogin(name, pin);
+  const token = signToken({ k: 'member', m: id, p: sessionStamp(member), exp: Date.now() + TOKEN_MS });
+  return { name: member.name, token };
+}
+
+/** Opens the signed-in member's order in the round (`Authorization: Bearer` from `signin`). */
+export async function openOrder(request: Request, roundId: unknown): Promise<OrderResponse> {
+  const token = verifyToken<MemberToken>(bearerToken(request));
+  if (!token || token.k !== 'member' || typeof token.m !== 'string') throw sessionExpired();
+  const member = await sessionMember(token.m, token.p);
+  if (!member) throw sessionExpired();
+  const round = await findRound(roundId);
+  return openMemberOrder(round, token.m, member);
+}
+
+/** Signs in and opens the order in the round in one step. */
+export async function login(roundId: unknown, name: string, pin: string): Promise<OrderResponse> {
+  const round = await findRound(roundId);
+  const { id: memberId, member } = await memberLogin(name, pin);
+  return openMemberOrder(round, memberId, member);
+}
+
+/** The member's order in the round; opened on their first visit (while the round is open). */
+async function openMemberOrder(round: RoundRef, memberId: string, member: StoredMember): Promise<OrderResponse> {
   let folder = await findRoundFolder(round.id);
   const state = stateOf(folder);
-  const file = folder ? await findOrderFile(folder.id, name) : null;
-  const now = new Date();
+  const file = folder ? await findMemberOrder(folder.id, memberId, member.name) : null;
 
   if (!file) {
-    if (!create) throw new HttpError(404, 'לא נמצאה הזמנה בשם הזה בסבב.', 'not_found');
-    if (state.locked || state.archived) throw lockedError(state);
+    if (state.locked || state.archived) {
+      throw new HttpError(404, 'אין לך הזמנה בסבב הזה. הסבב כבר סגור להזמנות חדשות.', 'no_order');
+    }
     folder ??= await ensureRoundFolder(round);
-    const o: StoredOrder = {
-      v: 1,
-      name,
-      pin: hashPin(pin),
-      fails: 0,
-      lockUntil: null,
-      rev: 1,
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
-      lines: [],
-      submitted: null,
-    };
-    const created = await createJsonFile(folder.id, name + '.json', summaryProps(o), o);
-    return { order: toDto(o), round: state, token: issueToken(round.id, created.id, o), pinSet: true };
+    const now = new Date().toISOString();
+    const o: StoredOrder = { v: 1, name: member.name, rev: 1, createdAt: now, updatedAt: now, lines: [], submitted: null };
+    const created = await createJsonFile(folder.id, member.name + '.json', { ...summaryProps(o), mid: memberId }, o);
+    return { order: toDto(o), round: state, token: issueToken(round.id, created.id, memberId, member), created: true };
   }
 
   const o = await readOrder(file.id);
-  const lockUntil = Date.parse(o.lockUntil || '');
-  if (lockUntil > now.getTime()) {
-    const minutes = Math.ceil((lockUntil - now.getTime()) / 60000);
-    throw new HttpError(429, `יותר מדי ניסיונות שגויים. נסו שוב בעוד ${minutes} דקות.`, 'too_many');
-  }
-
-  // After an admin PIN reset, the next login sets the new PIN.
-  if (!o.pin) {
-    o.pin = hashPin(pin);
-    o.fails = 0;
-    o.lockUntil = null;
-    await writeOrder(file.id, o);
-    return { order: toDto(o), round: state, token: issueToken(round.id, file.id, o), pinSet: true };
-  }
-
-  if (!checkPin(pin, o.pin)) {
-    o.fails += 1;
-    const blocked = o.fails >= MAX_PIN_FAILS;
-    if (blocked) {
-      o.fails = 0;
-      o.lockUntil = new Date(now.getTime() + PIN_LOCK_MS).toISOString();
-    }
-    await writeOrder(file.id, o);
-    if (blocked) throw new HttpError(429, 'יותר מדי ניסיונות שגויים. נסו שוב בעוד 15 דקות.', 'too_many');
-    throw new HttpError(401, 'קוד שגוי.', 'wrong_pin', { attemptsLeft: MAX_PIN_FAILS - o.fails });
-  }
-
-  if (o.fails || o.lockUntil) {
-    o.fails = 0;
-    o.lockUntil = null;
-    await writeOrder(file.id, o);
-  }
-  return { order: toDto(o), round: state, token: issueToken(round.id, file.id, o) };
+  return {
+    order: toDto(o),
+    round: state,
+    token: issueToken(round.id, file.id, memberId, member),
+    shortages: await orderShortages(folder!, file.id, state),
+  };
 }
 
 export interface OrderSession {
   fileId: string;
   order: StoredOrder;
   state: RoundState;
+  folder: AppFile;
 }
 
 /** Resolves the `Authorization: Bearer` session of an orderer. */
 export async function authorize(request: Request): Promise<OrderSession> {
-  const expired = () => new HttpError(401, 'פג תוקף הכניסה — היכנסו שוב.', 'session_expired');
   const token = verifyToken<OrderToken>(bearerToken(request));
-  if (!token || token.k !== 'order') throw expired();
-  const folder = await findRoundFolder(token.r);
-  if (!folder) throw expired();
+  if (!token || token.k !== 'order' || typeof token.m !== 'string') throw sessionExpired();
+  const [folder, member] = await Promise.all([findRoundFolder(token.r), sessionMember(token.m, token.p)]);
+  if (!folder || !member) throw sessionExpired();
   let order: StoredOrder;
   try {
     order = await readOrder(token.f);
   } catch (err) {
-    if (err instanceof HttpError && err.status === 404) throw expired();
+    if (err instanceof HttpError && err.status === 404) throw sessionExpired();
     throw err;
   }
-  if (!order.pin || order.pin.salt.slice(0, 8) !== token.p) throw expired();
-  return { fileId: token.f, order, state: stateOf(folder) };
+  return { fileId: token.f, order, state: stateOf(folder), folder };
 }
 
-export function loadResponse(session: OrderSession): OrderResponse {
-  return { order: toDto(session.order), round: session.state };
+export async function loadResponse(session: OrderSession): Promise<OrderResponse> {
+  return {
+    order: toDto(session.order),
+    round: session.state,
+    shortages: await orderShortages(session.folder, session.fileId, session.state),
+  };
 }
 
 /** Saves the lines (and with `submit`, marks this version as sent). `baseRev` must match the stored revision. */
@@ -330,10 +348,60 @@ export async function saveOrder(
   return { order: toDto(o), round: state };
 }
 
+// ── Shortages (units that did not arrive from the supplier) ──
+
+const SHORTAGES_FILE = 'shortages.json';
+
+function parseShortageLines(raw: unknown): ShortageLine[] {
+  return parseLines(raw, false).map(({ id, size, qty }) => ({ id, size, qty }));
+}
+
+async function readShortages(folder: AppFile): Promise<Shortages> {
+  const fileId = folder.appProperties.shortages;
+  if (!fileId) return {};
+  let raw: unknown;
+  try {
+    raw = await readJson(fileId);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return {};
+    throw err;
+  }
+  const orders = (raw as { orders?: unknown } | null)?.orders;
+  const out: Shortages = {};
+  if (orders && typeof orders === 'object') {
+    for (const [id, lines] of Object.entries(orders)) {
+      const parsed = parseShortageLines(lines);
+      if (parsed.length) out[id] = parsed;
+    }
+  }
+  return out;
+}
+
+/** What the orderer sees: only once the round is closed, since the marks follow the delivery. */
+async function orderShortages(folder: AppFile, fileId: string, state: RoundState): Promise<ShortageLine[] | undefined> {
+  if (!state.locked && !state.archived) return undefined;
+  return (await readShortages(folder))[fileId] ?? [];
+}
+
+async function writeShortages(folder: AppFile, orders: Shortages): Promise<void> {
+  const data = { v: 1, updatedAt: new Date().toISOString(), orders };
+  const fileId = folder.appProperties.shortages;
+  if (fileId) {
+    try {
+      await updateJsonFile(fileId, { kind: 'shortages' }, data);
+      return;
+    } catch (err) {
+      if (!(err instanceof HttpError && err.status === 404)) throw err;
+    }
+  }
+  const created = await createJsonFile(folder.id, SHORTAGES_FILE, { kind: 'shortages' }, data);
+  await updateProperties(folder.id, { shortages: created.id });
+}
+
 // ── Admin actions ──
 
 async function requireRoundFolder(roundId: unknown): Promise<AppFile | null> {
-  const round = await findRound(typeof roundId === 'string' ? roundId : null);
+  const round = await findRound(roundId, true);
   return findRoundFolder(round.id);
 }
 
@@ -356,10 +424,14 @@ export async function adminOrder(roundId: unknown, fileId: unknown): Promise<{ o
   return { order: toDto(await readOrder(file.id)) };
 }
 
-/** Every order of the round with its lines (for the combined Excel). */
-export async function allOrders(roundId: unknown): Promise<{ orders: { fileId: string; order: OrderDto }[] }> {
+/** Every order of the round with its lines, and the units that did not arrive. */
+export async function allOrders(
+  roundId: unknown,
+): Promise<{ orders: { fileId: string; order: OrderDto }[]; shortages: Shortages }> {
   const folder = await requireRoundFolder(roundId);
   const files = folder ? await orderFiles(folder.id) : [];
+  const shortages = folder ? readShortages(folder) : Promise.resolve({});
+  shortages.catch(() => undefined); // awaited below; avoids an unhandled rejection while the orders load
   const out: { fileId: string; order: OrderDto }[] = [];
   // A few downloads at a time keeps well within Drive's rate limits.
   for (let i = 0; i < files.length; i += 6) {
@@ -367,11 +439,47 @@ export async function allOrders(roundId: unknown): Promise<{ orders: { fileId: s
     const orders = await Promise.all(batch.map((f) => readOrder(f.id)));
     batch.forEach((f, j) => out.push({ fileId: f.id, order: toDto(orders[j]) }));
   }
-  return { orders: out };
+  return { orders: out, shortages: await shortages };
+}
+
+/**
+ * Marks how many units of orderers' lines did not arrive (qty 0 clears a mark). Applied as a patch on the
+ * stored marks, so two admins marking different lines don't overwrite each other. Closed rounds only.
+ */
+export async function setShortages(roundId: unknown, rawChanges: unknown): Promise<{ shortages: Shortages }> {
+  const folder = await requireRoundFolder(roundId);
+  if (!folder) throw new HttpError(404, 'אין הזמנות בסבב הזה.', 'not_found');
+  const state = stateOf(folder);
+  if (!state.locked && !state.archived) {
+    throw new HttpError(409, 'אפשר לסמן פריטים שלא הגיעו רק אחרי נעילת הסבב.', 'not_locked');
+  }
+  if (!Array.isArray(rawChanges) || !rawChanges.length || rawChanges.length > MAX_LINES) {
+    throw new HttpError(400, 'Invalid shortage changes.');
+  }
+  const fileIds = new Set((await orderFiles(folder.id)).map((f) => f.id));
+  const changes = (rawChanges as Record<string, unknown>[]).map((c) => {
+    const fileId = str(c?.fileId, 200);
+    const id = str(c?.id, 300);
+    const size = str(c?.size, 60);
+    const qty = c?.qty;
+    const valid = fileId && fileIds.has(fileId) && id && size && typeof qty === 'number' && Number.isInteger(qty) && qty >= 0 && qty <= 9999;
+    if (!valid) throw new HttpError(400, 'Invalid shortage change.');
+    return { fileId, id, size, qty };
+  });
+
+  const orders = await readShortages(folder);
+  for (const c of changes) {
+    const lines = (orders[c.fileId] ?? []).filter((l) => l.id !== c.id || l.size !== c.size);
+    if (c.qty > 0) lines.push({ id: c.id, size: c.size, qty: c.qty });
+    if (lines.length) orders[c.fileId] = lines;
+    else delete orders[c.fileId];
+  }
+  await writeShortages(folder, orders);
+  return { shortages: orders };
 }
 
 export async function setRoundState(roundId: unknown, patch: { locked?: unknown; archived?: unknown }): Promise<{ round: RoundState }> {
-  const round = await findRound(typeof roundId === 'string' ? roundId : null);
+  const round = await findRound(roundId, true);
   const folder = await ensureRoundFolder(round);
   const props: Record<string, string> = {};
   if (typeof patch.locked === 'boolean') props.locked = patch.locked ? '1' : '0';
@@ -380,13 +488,20 @@ export async function setRoundState(roundId: unknown, patch: { locked?: unknown;
   return { round: stateOf(updated) };
 }
 
-/** Clears the PIN: the next login with this name sets a new one (and ends existing sessions). */
-export async function resetPin(roundId: unknown, fileId: unknown): Promise<{ ok: true }> {
-  const file = await orderFileInRound(roundId, fileId);
-  const o = await readOrder(file.id);
-  o.pin = null;
-  o.fails = 0;
-  o.lockUntil = null;
-  await writeOrder(file.id, o);
+/**
+ * Deletes (to the Drive trash) a round created on the admin page, with its orders folder.
+ * Refused once anyone ordered or sent an order in it — such a round can be archived instead.
+ */
+export async function deleteRound(roundId: unknown): Promise<{ ok: true }> {
+  const round = await findAppRound(roundId);
+  const folder = await findRoundFolder(round.id);
+  if (folder) {
+    const orders = await orderFiles(folder.id);
+    if (orders.some((f) => Number(f.appProperties.units) > 0 || f.appProperties.sub)) {
+      throw new HttpError(409, 'יש בסבב הזמנות — אי אפשר למחוק אותו (אפשר להעביר לארכיון).', 'has_orders');
+    }
+    await trashFile(folder.id);
+  }
+  await trashFile(round.folder.id);
   return { ok: true };
 }

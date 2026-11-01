@@ -1,9 +1,9 @@
 import { Fragment, useState } from 'react';
-import type { OrderDto, OrderSummary } from '../../api/_types';
+import type { OrderDto, OrderSummary, Shortages } from '../../api/_types';
 import { ProductImage } from '../components/ProductImage';
 import { isChangedAfterSend, orderDetail, type Totals } from '../lib/catalog/adminView';
-import type { CombineMode } from '../lib/catalog/combinedOrder';
-import { formatSavedAt, toMoney } from '../lib/catalog/text';
+import { missingQty, shortageIndex } from '../lib/catalog/shortages';
+import { formatSavedAt, notArrived, toMoney } from '../lib/catalog/text';
 import type { Catalog } from '../lib/catalog/types';
 import type { ImageRef } from '../lib/source/types';
 import { ImageView } from './ImageView';
@@ -11,28 +11,75 @@ import { ImageView } from './ImageView';
 /** What the order details are drawn from; null until the full orders and the catalog have loaded. */
 export interface DetailSource {
   orders: Map<string, OrderDto>;
+  shortages: Shortages;
   catalog: Catalog;
   images: Map<string, ImageRef>;
 }
 
 interface Props {
   rows: OrderSummary[];
-  /** Per-order totals of the chosen version; null until the full orders have loaded. */
+  /** Per-order totals of the sent version; null until the full orders have loaded. */
   totals: Map<string, Totals> | null;
   detail: DetailSource | null;
-  version: CombineMode;
-  busy: boolean;
-  onResetPin: (o: OrderSummary) => void;
 }
 
 type Enlarged = { src: string; caption: string };
 
-export function OrderersTable({ rows, totals, detail, version, busy, onResetPin }: Props) {
+type SortKey = 'name' | 'units' | 'amount' | 'sent';
+/** A column's first click: names A→Z, numbers largest first, status by what needs attention first. */
+const FIRST_DESC: Record<SortKey, boolean> = { name: false, units: true, amount: true, sent: false };
+
+/** A draft that has no items: nothing to act on, so it always sits at the end of the list. */
+const isEmpty = (o: OrderSummary) => !o.submittedAt && !o.units;
+/** Changed after sending, then drafts, then sent. */
+const statusRank = (o: OrderSummary) => (isChangedAfterSend(o) ? 0 : !o.submittedAt ? 1 : 2);
+
+export function OrderersTable({ rows, totals, detail }: Props) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const [showAll, setShowAll] = useState(false);
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'name', desc: false });
   const [enlarged, setEnlarged] = useState<Enlarged | null>(null);
   const of = (o: OrderSummary) => totals?.get(o.fileId);
-  const notInVersion = (o: OrderSummary) => version === 'submitted' && !o.submittedAt;
+
+  /** The value a column sorts by; null (no value, e.g. the amount of a draft) always goes last. */
+  const sortValue = (o: OrderSummary): number | null => {
+    switch (sort.key) {
+      case 'units':
+        return o.submittedAt ? (of(o)?.units ?? null) : o.units;
+      case 'amount':
+        return o.submittedAt ? (of(o)?.amount ?? null) : null;
+      default:
+        return null;
+    }
+  };
+  const compare = (a: OrderSummary, b: OrderSummary): number => {
+    if (sort.key === 'name') return a.name.localeCompare(b.name, 'he');
+    if (sort.key === 'sent') {
+      // Within a status, the latest activity first.
+      const at = (o: OrderSummary) => (isChangedAfterSend(o) || !o.submittedAt ? o.updatedAt : o.submittedAt!);
+      return statusRank(a) - statusRank(b) || at(b).localeCompare(at(a));
+    }
+    return (sortValue(a) ?? 0) - (sortValue(b) ?? 0);
+  };
+  const sorted = [...rows].sort((a, b) => {
+    const empty = Number(isEmpty(a)) - Number(isEmpty(b));
+    if (empty) return empty;
+    const missing = Number(sortValue(a) === null) - Number(sortValue(b) === null);
+    if (missing) return missing;
+    return (sort.desc ? -compare(a, b) : compare(a, b)) || a.name.localeCompare(b.name, 'he');
+  });
+
+  const sortHeader = (key: SortKey, label: string, className?: string) => (
+    <th className={className} aria-sort={sort.key === key ? (sort.desc ? 'descending' : 'ascending') : undefined}>
+      <button
+        type="button"
+        className="admin-sort"
+        onClick={() => setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: FIRST_DESC[key] }))}
+      >
+        {label}
+        <span className="admin-sort-arrow">{sort.key === key ? (sort.desc ? '▼' : '▲') : ''}</span>
+      </button>
+    </th>
+  );
 
   const toggle = (fileId: string) =>
     setOpen((cur) => {
@@ -41,10 +88,27 @@ export function OrderersTable({ rows, totals, detail, version, busy, onResetPin 
       return next;
     });
 
-  const sum = { units: 0, amount: 0 };
+  // Opens or closes every listed row; each row can still be toggled on its own afterwards.
+  const allOpen = rows.every((o) => open.has(o.fileId));
+  const toggleAll = () =>
+    setOpen((cur) => {
+      const next = new Set(cur);
+      for (const o of rows) {
+        if (allOpen) next.delete(o.fileId);
+        else next.add(o.fileId);
+      }
+      return next;
+    });
+
+  const sum = { units: 0, amount: 0, missingUnits: 0, draftUnits: 0, drafts: 0 };
   for (const o of rows) {
     sum.units += of(o)?.units ?? 0;
     sum.amount += of(o)?.amount ?? 0;
+    sum.missingUnits += of(o)?.missingUnits ?? 0;
+    if (!o.submittedAt && o.units) {
+      sum.draftUnits += o.units;
+      sum.drafts++;
+    }
   }
 
   if (!rows.length) return <div className="muted">אין מזמינים שמתאימים לסינון.</div>;
@@ -52,50 +116,83 @@ export function OrderersTable({ rows, totals, detail, version, busy, onResetPin 
   return (
     <div className="admin-products">
       <div className="admin-actions small">
-        <label>
-          <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> הצג פירוט לכל המזמינים
-        </label>
+        <button type="button" className="btn-link" onClick={toggleAll}>
+          {allOpen ? '▴ סגירת כל הפירוטים' : '▾ פתיחת כל הפירוטים'}
+        </button>
       </div>
     <div className="admin-table-wrap">
-      <table className="admin-table">
+      <table className="admin-table admin-orderers-table">
         <thead>
           <tr>
-            <th>שם</th>
-            <th className="num">יחידות</th>
-            <th className="num">סכום</th>
-            <th className="admin-col-updated">עודכן</th>
-            <th>נשלח</th>
-            <th />
+            {sortHeader('name', 'שם')}
+            {sortHeader('sent', 'נשלח')}
+            {sortHeader('units', 'יחידות', 'num')}
+            {sortHeader('amount', sum.missingUnits ? 'לתשלום' : 'סכום', 'num')}
           </tr>
         </thead>
         <tbody>
-          {rows.map((o) => {
+          {sorted.map((o) => {
             const t = of(o);
             const order = detail?.orders.get(o.fileId);
-            const isOpen = showAll || open.has(o.fileId);
+            const isOpen = open.has(o.fileId);
             return (
               <Fragment key={o.fileId}>
-              <tr className={isOpen ? 'open' : undefined}>
+              <tr className={[isOpen && 'open', isEmpty(o) && 'admin-empty-row'].filter(Boolean).join(' ') || undefined}>
                 <td>
                   <button
                     type="button"
                     className="admin-prod-btn admin-name-btn"
                     aria-expanded={isOpen}
-                    disabled={showAll}
                     onClick={() => toggle(o.fileId)}
                   >
                     <span className="admin-caret">{isOpen ? '▾' : '▸'}</span>
                     <bdi>{o.name}</bdi>
-                    {!o.hasPin && <span className="chip chip-warn admin-chip">קוד אופס</span>}
                   </button>
                 </td>
-                <td className="num">{notInVersion(o) ? '—' : t ? t.units : version === 'current' ? o.units : '…'}</td>
+                <td>
+                  {o.submittedAt ? (
+                    <>
+                      <span className="save-ok">✓ {formatSavedAt(o.submittedAt)}</span>
+                      {isChangedAfterSend(o) && (
+                        <div className="danger small">שונתה אחרי השליחה {formatSavedAt(o.updatedAt)}</div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="muted">לא נשלחה</span>
+                      <div className="muted small">עודכנה {formatSavedAt(o.updatedAt)}</div>
+                    </>
+                  )}
+                </td>
                 <td className="num">
-                  {notInVersion(o) ? (
+                  {!o.submittedAt ? (
+                    <span className="admin-pending" title="טיוטה שלא נשלחה — לא נכללת בסיכומים">
+                      {o.units ? `${o.units} בטיוטה` : 'ריקה'}
+                    </span>
+                  ) : t ? (
+                    <>
+                      {t.units}
+                      {isChangedAfterSend(o) && o.units !== t.units && (
+                        <div className="danger small" title="הכמות בהזמנה כרגע, אחרי שינויים שלא נשלחו">
+                          עכשיו {o.units}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    '…'
+                  )}
+                </td>
+                <td className="num">
+                  {!o.submittedAt ? (
                     '—'
                   ) : t ? (
                     <>
                       {toMoney(t.amount)}
+                      {t.missingUnits > 0 && (
+                        <div className="danger small" title={`לא מחויבים: ${toMoney(t.missingAmount)}`}>
+                          {notArrived(t.missingUnits)}
+                        </div>
+                      )}
                       {t.unpricedUnits > 0 && (
                         <div className="danger small" title="יחידות שאין להן מחיר בקטלוג">
                           +{t.unpricedUnits} ללא מחיר
@@ -106,30 +203,18 @@ export function OrderersTable({ rows, totals, detail, version, busy, onResetPin 
                     '…'
                   )}
                 </td>
-                <td className="admin-col-updated">{formatSavedAt(o.updatedAt)}</td>
-                <td>
-                  {o.submittedAt ? (
-                    <>
-                      <span className="save-ok">✓ {formatSavedAt(o.submittedAt)}</span>
-                      {isChangedAfterSend(o) && <div className="danger small">שונתה אחרי השליחה</div>}
-                    </>
-                  ) : (
-                    <span className="muted">לא נשלחה</span>
-                  )}
-                </td>
-                <td>
-                  <div className="admin-row-actions">
-                    <button type="button" className="btn-secondary btn-sm" disabled={busy || !o.hasPin} onClick={() => onResetPin(o)}>
-                      איפוס קוד
-                    </button>
-                  </div>
-                </td>
               </tr>
               {isOpen && (
                 <tr className="admin-who-row">
-                  <td colSpan={6}>
+                  <td colSpan={4}>
                     {detail && order ? (
-                      <OrderDetail order={order} source={detail} version={version} onEnlarge={setEnlarged} />
+                      <OrderDetail
+                        name={o.name}
+                        order={order}
+                        shortages={detail.shortages[o.fileId]}
+                        source={detail}
+                        onEnlarge={setEnlarged}
+                      />
                     ) : (
                       <div className="muted">טוען…</div>
                     )}
@@ -144,10 +229,15 @@ export function OrderersTable({ rows, totals, detail, version, busy, onResetPin 
           <tfoot>
             <tr>
               <td>סה״כ ({rows.length})</td>
-              <td className="num">{sum.units}</td>
-              <td className="num">{toMoney(sum.amount)}</td>
-              <td className="admin-col-updated" />
-              <td colSpan={2} />
+              <td />
+              <td className="num">
+                {sum.units}
+                {sum.draftUnits > 0 && <div className="admin-pending small">לא כולל {sum.draftUnits} {sum.drafts === 1 ? 'בטיוטה' : 'בטיוטות'}</div>}
+              </td>
+              <td className="num">
+                {toMoney(sum.amount)}
+                {sum.missingUnits > 0 && <div className="danger small">{notArrived(sum.missingUnits)}</div>}
+              </td>
             </tr>
           </tfoot>
         )}
@@ -159,35 +249,47 @@ export function OrderersTable({ rows, totals, detail, version, busy, onResetPin 
 }
 
 interface DetailProps {
+  name: string;
   order: OrderDto;
+  shortages: Shortages[string] | undefined;
   source: DetailSource;
-  version: CombineMode;
   onEnlarge: (e: Enlarged) => void;
 }
 
 /** One order's lines; after a change since sending, the sent and current quantities side by side. */
-function OrderDetail({ order, source, version, onEnlarge }: DetailProps) {
+function OrderDetail({ name, order, shortages, source, onEnlarge }: DetailProps) {
   const rows = orderDetail(source.catalog, order);
   const changed = !!order.submitted && order.submitted.rev !== order.rev;
-  // The amount follows the chosen version when both are shown; otherwise there is only one quantity.
-  const qtyOf = (r: (typeof rows)[number]) => (changed && version === 'submitted' ? r.sent : r.current);
+  // Amounts follow the sent version (what is charged); a draft that was never sent shows its own lines.
+  const qtyOf = (r: (typeof rows)[number]) => (order.submitted ? r.sent : r.current);
+  const index = shortageIndex(shortages);
+  const missingOf = (r: (typeof rows)[number]) => missingQty(index, r.id, r.size, qtyOf(r));
+  const anyMissing = rows.some((r) => missingOf(r) > 0);
 
-  const sum = { sent: 0, current: 0, amount: 0 };
+  const sum = { sent: 0, current: 0, amount: 0, missing: 0 };
   for (const r of rows) {
     sum.sent += r.sent;
     sum.current += r.current;
-    if (r.item?.price != null) sum.amount += r.item.price * qtyOf(r);
+    sum.missing += missingOf(r);
+    if (r.item?.price != null) sum.amount += r.item.price * (qtyOf(r) - missingOf(r));
   }
 
+  // The orderer's row already shows when it was sent and changed; only what the row doesn't say.
   const note = !order.submitted
-    ? 'טיוטה — עדיין לא נשלחה.'
+    ? 'טיוטה — לא נכללת בסיכומים.'
     : changed
-      ? `שונתה אחרי השליחה (נשלחה ${formatSavedAt(order.submitted.at)}). שורות שהשתנו מסומנות.`
-      : `נשלחה ${formatSavedAt(order.submitted.at)}.`;
+      ? 'הסכום לפי מה שנשלח; שורות שהשתנו מסומנות.'
+      : '';
 
   return (
     <div className="admin-detail">
-      <div className={'small' + (changed ? ' danger' : ' muted')}>{note}</div>
+      {/* Stays under the table header while the detail scrolls by; the name shows once the orderer's row is gone. */}
+      <div className="admin-detail-head">
+        <div className="admin-detail-bar">
+          <bdi className="admin-detail-who">{name}</bdi>
+          {note && <span className={'admin-detail-note small' + (changed ? ' danger' : ' muted')}>{note}</span>}
+        </div>
+      </div>
       {!rows.length ? (
         <div className="muted">ההזמנה ריקה.</div>
       ) : (
@@ -204,20 +306,33 @@ function OrderDetail({ order, source, version, onEnlarge }: DetailProps) {
               ) : (
                 <th className="num">כמות</th>
               )}
+              {anyMissing && <th className="num">לא הגיע</th>}
               <th className="num">מחיר</th>
-              <th className="num">סכום</th>
+              <th className="num">{anyMissing ? 'לתשלום' : 'סכום'}</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {rows.map((r, i) => {
               const label = [r.model, r.color].filter(Boolean).join(' · ');
               const image = r.item && source.images.get(r.item.modelKey);
               const qty = qtyOf(r);
+              const missing = missingOf(r);
+              // Like the products table: the model's name and picture once, then only the color, or nothing for another size.
+              const modelOf = (x: (typeof rows)[number] | undefined) => x && (x.item?.modelKey ?? x.model);
+              const prev = rows[i - 1];
+              const sameItemAsPrev = prev?.id === r.id;
+              const sameModelAsPrev = modelOf(prev) === modelOf(r) && !!r.color;
+              const sameModelAsNext = modelOf(rows[i + 1]) === modelOf(r);
+              const cls = [changed && r.sent !== r.current && 'diff', missing && 'short', sameModelAsNext && 'admin-model-more']
+                .filter(Boolean)
+                .join(' ');
               return (
-                <tr key={r.id + '|' + r.size} className={changed && r.sent !== r.current ? 'diff' : undefined}>
+                <tr key={r.id + '|' + r.size} className={cls || undefined}>
                   <td>
                     <div className="admin-prod-cell">
-                      {image ? (
+                      {sameItemAsPrev || sameModelAsPrev ? (
+                        <span className="admin-thumb admin-thumb-none" />
+                      ) : image ? (
                         <button
                           type="button"
                           className="admin-thumb-btn"
@@ -235,8 +350,8 @@ function OrderDetail({ order, source, version, onEnlarge }: DetailProps) {
                       ) : (
                         <span className="admin-thumb admin-thumb-empty" />
                       )}
-                      <bdi>{label}</bdi>
-                      {!r.item && <span className="chip chip-warn admin-chip">לא בקטלוג</span>}
+                      {!sameItemAsPrev && <bdi>{sameModelAsPrev ? r.color : label}</bdi>}
+                      {!r.item && !sameItemAsPrev && <span className="chip chip-warn admin-chip">לא בקטלוג</span>}
                     </div>
                   </td>
                   <td>
@@ -250,8 +365,9 @@ function OrderDetail({ order, source, version, onEnlarge }: DetailProps) {
                   ) : (
                     <td className="num">{r.current}</td>
                   )}
+                  {anyMissing && <td className="num danger">{missing || ''}</td>}
                   <td className="num muted">{r.item ? toMoney(r.item.price) : ''}</td>
-                  <td className="num">{r.item?.price != null && qty ? toMoney(r.item.price * qty) : ''}</td>
+                  <td className="num">{r.item?.price != null && qty ? toMoney(r.item.price * (qty - missing)) : ''}</td>
                 </tr>
               );
             })}
@@ -267,6 +383,7 @@ function OrderDetail({ order, source, version, onEnlarge }: DetailProps) {
               ) : (
                 <td className="num">{sum.current}</td>
               )}
+              {anyMissing && <td className="num danger">{sum.missing}</td>}
               <td />
               <td className="num">{toMoney(sum.amount)}</td>
             </tr>

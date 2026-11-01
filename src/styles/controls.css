@@ -35,6 +35,19 @@
 
 .status.error { color: #c92a2a; }
 
+/* `?preview` from the admin page: nothing is saved. */
+.preview-banner {
+  border: 1px solid #ffd8a8;
+  border-radius: 10px;
+  background: #fff9db;
+  color: #8a4b08;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .summary {
   padding: 10px 14px;
   display: grid;
@@ -122,8 +135,6 @@
 
 .round-card strong { font-size: 17px; }
 
-.round-draft { color: var(--accent); font-size: 13px; font-weight: 600; }
-
 .round-card:hover:not(:disabled) { border-color: var(--accent); background: #f3fbfc; }
 
 .round-archived { background: #f8f9fa; }
@@ -149,7 +160,19 @@
   align-items: end;
 }
 
-.pin-input { width: 90px; letter-spacing: 4px; text-align: center; }
+.pin-input { width: 120px; letter-spacing: 4px; text-align: center; }
+
+.login-help { margin: 0; font-size: 13px; }
+
+.login-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.header-account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline-start: auto;
+  font-size: 14px;
+}
 
 .account-box {
   display: flex;

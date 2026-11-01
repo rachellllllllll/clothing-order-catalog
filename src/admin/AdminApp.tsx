@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { RoundState } from '../../api/_types';
-import { apiPost } from '../lib/api/client';
-import { loadDriveRounds } from '../lib/source/drive';
+import { ApiError, apiPost } from '../lib/api/client';
 import type { Round } from '../lib/source/types';
 import { RoundChooser } from '../components/RoundChooser';
+import { unsavedCatalog } from './CatalogEditor';
+import { MembersAdmin } from './MembersAdmin';
+import { NewRoundForm } from './NewRoundForm';
 import { errText, RoundAdmin } from './RoundAdmin';
 import '../styles/admin.css';
+
+/** Leaving the open round (or the page section) drops unsaved catalog edits: ask first. */
+const canLeave = () => !unsavedCatalog.current || window.confirm('יש שינויים בקטלוג שלא נשמרו. לצאת בלי לשמור?');
 
 /** Opens a round straight away when there is no real choice: a single round, or a single non-archived one. */
 function defaultRoundId(rounds: Round[]): string {
@@ -13,13 +17,20 @@ function defaultRoundId(rounds: Round[]): string {
   return rounds.length === 1 ? rounds[0].id : active.length === 1 ? active[0].id : '';
 }
 
-/** Admin page at /admin: round state, orderers list, PIN resets and the combined Excel. */
+type View = 'rounds' | 'members';
+
+/** Admin page at /admin: rounds (state, orders) and the list of who may order. */
 export function AdminApp() {
   const [admin, setAdmin] = useState<boolean | null>(null);
+  // `?view=members` keeps the orderers list open across reloads.
+  const [view, setView] = useState<View>(() =>
+    new URLSearchParams(window.location.search).get('view') === 'members' ? 'members' : 'rounds',
+  );
   const [rounds, setRounds] = useState<Round[] | null>(null);
   // `?round=<id>` keeps the chosen round across reloads and bookmarks, like on the order page.
   const [roundId, setRoundId] = useState(() => new URLSearchParams(window.location.search).get('round') ?? '');
   const [error, setError] = useState('');
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     apiPost<{ admin: boolean }>('/api/admin', { action: 'session' })
@@ -27,17 +38,22 @@ export function AdminApp() {
       .catch(() => setAdmin(false));
   }, []);
 
+  // Through the admin API: it includes the drafts the orderers don't see.
   useEffect(() => {
     if (!admin) return;
     let live = true;
     setError('');
-    loadDriveRounds()
-      .then((list) => {
+    apiPost<{ rounds: Round[] }>('/api/admin', { action: 'rounds' })
+      .then(({ rounds: list }) => {
         if (!live) return;
         setRounds(list);
         setRoundId((id) => (list.some((r) => r.id === id) ? id : defaultRoundId(list)));
       })
-      .catch((err) => live && setError(errText(err)));
+      .catch((err) => {
+        if (!live) return;
+        if (err instanceof ApiError && err.status === 401) setAdmin(false);
+        else setError(errText(err));
+      });
     return () => {
       live = false;
     };
@@ -49,34 +65,59 @@ export function AdminApp() {
     const url = new URL(window.location.href);
     if (roundId) url.searchParams.set('round', roundId);
     else url.searchParams.delete('round');
+    if (view === 'members') url.searchParams.set('view', view);
+    else url.searchParams.delete('view');
     window.history.replaceState(null, '', url);
-  }, [rounds, roundId]);
+  }, [rounds, roundId, view]);
 
-  const onRoundState = useCallback(
-    (id: string, state: RoundState) => setRounds((list) => list?.map((r) => (r.id === id ? { ...r, ...state } : r)) ?? null),
+  const onRoundChange = useCallback(
+    (id: string, patch: Partial<Round>) => setRounds((list) => list?.map((r) => (r.id === id ? { ...r, ...patch } : r)) ?? null),
     [],
   );
+  const onDeleted = useCallback((id: string) => {
+    setRounds((list) => list?.filter((r) => r.id !== id) ?? null);
+    setRoundId('');
+  }, []);
+  const onCreated = useCallback((created: Round) => {
+    setRounds((list) => [created, ...(list ?? []).filter((r) => r.id !== created.id)]);
+    setRoundId(created.id);
+    setCreating(false);
+  }, []);
   const onSignedOut = useCallback(() => setAdmin(false), []);
 
   async function logout() {
+    if (!canLeave()) return;
     await apiPost('/api/admin', { action: 'logout' }).catch(() => undefined);
     setAdmin(false);
   }
 
-  const round = admin ? rounds?.find((r) => r.id === roundId) : undefined;
-  const canSwitchRound = (rounds?.length ?? 0) > 1;
+  const switchView = (v: View) => v !== view && canLeave() && setView(v);
+
+  const round = admin && view === 'rounds' && !creating ? rounds?.find((r) => r.id === roundId) : undefined;
+  // From an open round back to the list, also to create another round.
+  const canSwitchRound = !!rounds?.length;
 
   return (
     <div className="wrap admin">
       <header className="app-header">
         <h1>ניהול הזמנות</h1>
+        {admin && (
+          <div className="admin-seg" role="tablist">
+            <button type="button" role="tab" aria-selected={view === 'rounds'} onClick={() => switchView('rounds')}>
+              סבבים
+            </button>
+            <button type="button" role="tab" aria-selected={view === 'members'} onClick={() => switchView('members')}>
+              רשימת מזמינים
+            </button>
+          </div>
+        )}
         {round && (
           <span className="round-name">
             סבב: <bdi>{round.name}</bdi>
           </span>
         )}
         {round && canSwitchRound && (
-          <button type="button" className="btn-secondary btn-sm" onClick={() => setRoundId('')}>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => canLeave() && setRoundId('')}>
             החלפת סבב
           </button>
         )}
@@ -93,16 +134,23 @@ export function AdminApp() {
         <div className="muted">טוען…</div>
       ) : !admin ? (
         <AdminLogin onSignedIn={() => setAdmin(true)} />
+      ) : view === 'members' ? (
+        <MembersAdmin onSignedOut={onSignedOut} />
       ) : error ? (
         <div className="status error">{error}</div>
       ) : !rounds ? (
         <div className="muted">טוען סבבים…</div>
-      ) : !rounds.length ? (
-        <div className="muted">אין סבבים בתיקיית הקטלוג.</div>
+      ) : creating ? (
+        <NewRoundForm onCreated={onCreated} onCancel={() => setCreating(false)} onSignedOut={onSignedOut} />
       ) : round ? (
-        <RoundAdmin key={round.id} round={round} onRoundState={onRoundState} onSignedOut={onSignedOut} />
+        <RoundAdmin key={round.id} round={round} onRoundChange={onRoundChange} onDeleted={onDeleted} onSignedOut={onSignedOut} />
       ) : (
-        <RoundChooser rounds={rounds} onSelect={(r) => setRoundId(r.id)} archiveTitle="ארכיון" />
+        <RoundChooser
+          rounds={rounds}
+          onSelect={(r) => setRoundId(r.id)}
+          onCreate={() => setCreating(true)}
+          archiveTitle="ארכיון"
+        />
       )}
     </div>
   );

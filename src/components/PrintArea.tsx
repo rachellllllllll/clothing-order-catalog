@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom';
 import { groupLinesByModel } from '../lib/catalog/selectors';
-import { normalizeText, toMoney } from '../lib/catalog/text';
+import { normalizeText, notArrived, toMoney } from '../lib/catalog/text';
 import type { CartLine } from '../lib/catalog/types';
 import { useCart } from '../store/cartHooks';
 import { useOrderStore } from '../store/orderStore';
@@ -44,6 +44,11 @@ export function PrintArea() {
         <div className="cell">
           יחידות ללא מחיר<b>{totals.unpricedUnits}</b>
         </div>
+        {totals.missingUnits > 0 && (
+          <div className="cell">
+            לא הגיעו (לא בחיוב)<b>{totals.missingUnits}</b>
+          </div>
+        )}
       </div>
       {models.map((model) => (
         <PrintGroup
@@ -99,7 +104,10 @@ function PrintGroup({
               <tr key={l.itemId + '|' + l.size}>
                 <td>{l.color}</td>
                 <td>{l.size}</td>
-                <td>{l.qty}</td>
+                <td>
+                  {l.qty}
+                  {!!l.missing && ` (${notArrived(l.missing)})`}
+                </td>
                 <td>{l.price == null ? <NoPrice /> : toMoney(l.price)}</td>
                 <td>{l.subtotal == null ? <NoPrice /> : toMoney(l.subtotal)}</td>
                 {hasAnyNotes && <td>{l.notes}</td>}

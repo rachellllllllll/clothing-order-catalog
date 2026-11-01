@@ -16,7 +16,7 @@ export function ControlsPanel({ allowLocalFolder }: Props) {
   const loadSource = useOrderStore((s) => s.loadSource);
   const clearAll = useOrderStore((s) => s.clearAll);
   const { totals } = useCart();
-  const { exportOrder, disabledReason } = useExportOrder();
+  const { exportOrder, disabledReason, available: canExport } = useExportOrder();
 
   function onFolderPicked(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
@@ -54,20 +54,22 @@ export function ControlsPanel({ allowLocalFolder }: Props) {
               onChange={(e) => setSigner(e.target.value)}
             />
           </div>
-          <button
-            type="button"
-            className="btn-primary"
-            disabled={!!disabledReason}
-            title={disabledReason}
-            onClick={exportOrder}
-          >
-            הורדת קובץ הזמנה
-          </button>
+          {canExport && (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!!disabledReason}
+              title={disabledReason}
+              onClick={exportOrder}
+            >
+              הורדת קובץ הזמנה
+            </button>
+          )}
           <button type="button" className="btn-secondary" disabled={totals.units === 0} onClick={onClear}>
             ניקוי כל הכמויות
           </button>
         </div>
-        <span className="muted">ההזמנה נשמרת בדפדפן. בסיום – הורידו את קובץ ההזמנה ושלחו אותו אליי.</span>
+        {canExport && <span className="muted">ההזמנה נשמרת בדפדפן. בסיום – הורידו את קובץ ההזמנה ושלחו אותו אליי.</span>}
       </div>
 
       <div className={'status' + (status.isError ? ' error' : '')}>{loading ? 'טוען קטלוג…' : status.message}</div>

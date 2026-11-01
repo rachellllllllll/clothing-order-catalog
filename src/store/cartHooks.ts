@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { cartLines, cartTotals, type CartTotals } from '../lib/catalog/selectors';
+import { cartLines, cartTotals, withShortages, type CartTotals } from '../lib/catalog/selectors';
 import { linesKey } from '../lib/catalog/draft';
 import { buildOrderWorkbook, downloadBlob, exportFileName } from '../lib/catalog/exportOrder';
 import { safeText, toMoney } from '../lib/catalog/text';
@@ -10,15 +10,17 @@ import { submitOrder } from './orderSync';
 export function useCart(): { lines: CartLine[]; totals: CartTotals } {
   const catalog = useOrderStore((s) => s.catalog);
   const qty = useOrderStore((s) => s.qty);
+  const shortages = useOrderStore((s) => s.shortages);
   return useMemo(() => {
-    const lines = catalog ? cartLines(catalog, qty) : [];
+    const lines = catalog ? withShortages(cartLines(catalog, qty), shortages) : [];
     return { lines, totals: cartTotals(lines) };
-  }, [catalog, qty]);
+  }, [catalog, qty, shortages]);
 }
 
-/** Export state + action, shared by the controls panel and the cart modal. */
+/** Export state + action for the controls panel (`available`: the round has an Excel file to fill in). */
 export function useExportOrder() {
   const hasCatalog = useOrderStore((s) => !!s.catalog);
+  const available = useOrderStore((s) => !s.source || !!s.source.excelData);
   const hasSigner = useOrderStore((s) => safeText(s.signer).length > 0);
   const { totals } = useCart();
 
@@ -29,7 +31,7 @@ export function useExportOrder() {
 
   async function exportOrder() {
     const { source, catalog, qty, signer, account, setStatus } = useOrderStore.getState();
-    if (!source || !catalog) return;
+    if (!source?.excelData || !catalog) return;
     try {
       const blob = await buildOrderWorkbook(source.excelData, catalog, qty, signer);
       const name = exportFileName(source.excelName, signer);
@@ -41,7 +43,7 @@ export function useExportOrder() {
     }
   }
 
-  return { exportOrder, disabledReason };
+  return { exportOrder, disabledReason, available };
 }
 
 /** "Send order" state + action for a signed-in Drive order (shared by the controls panel and the cart). */

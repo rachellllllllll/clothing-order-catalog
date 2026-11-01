@@ -1,10 +1,14 @@
+import { parseCatalog } from '../catalog/parseCatalog';
 import { normalizeText } from '../catalog/text';
+import { readFirstSheet } from '../xlsx/xlsx';
 import { EXCEL_RE, type CatalogSource, type ImageRef } from './types';
 
 /** Development/offline mode: a folder picked from disk that contains the Excel file and the images. */
 export async function loadLocalFolder(files: File[]): Promise<CatalogSource> {
   const excel = files.find((f) => EXCEL_RE.test(f.name) && !f.name.startsWith('~$'));
   if (!excel) throw new Error('לא נמצא קובץ אקסל (.xlsx) בתיקייה שנבחרה.');
+  const excelData = await excel.arrayBuffer();
+  const catalog = parseCatalog(await readFirstSheet(excelData));
 
   const urls: string[] = [];
   const images = new Map<string, ImageRef>();
@@ -19,7 +23,8 @@ export async function loadLocalFolder(files: File[]): Promise<CatalogSource> {
   return {
     kind: 'local',
     excelName: excel.name,
-    excelData: await excel.arrayBuffer(),
+    excelData,
+    catalog,
     catalogKey: 'local:' + excel.name,
     images,
     dispose: () => urls.forEach((u) => URL.revokeObjectURL(u)),

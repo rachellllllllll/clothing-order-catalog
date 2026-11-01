@@ -3,7 +3,7 @@ import { buildXlsx } from '../../test/buildXlsx';
 import { readFirstSheet } from '../xlsx/xlsx';
 import { buildOrderUpdates, exportFileName } from './exportOrder';
 import { parseCatalog } from './parseCatalog';
-import { cartLines, cartTotals } from './selectors';
+import { cartLines, cartTotals, withShortages } from './selectors';
 import type { QtyMap } from './types';
 
 const ROWS = [
@@ -47,7 +47,17 @@ describe('parseCatalog', () => {
     const qty: QtyMap = { [red.id]: { '2Y': 2 }, [shirt.id]: { '6Y': 1 } };
 
     const lines = cartLines(c, qty);
-    expect(cartTotals(lines)).toEqual({ units: 3, amount: 200, unpricedUnits: 1 });
+    expect(cartTotals(lines)).toEqual({ units: 3, amount: 200, unpricedUnits: 1, missingUnits: 0 });
+
+    const short = withShortages(lines, [
+      { id: red.id, size: '2Y', qty: 1 },
+      { id: shirt.id, size: '6Y', qty: 4 },
+    ]);
+    expect(short.map((l) => [l.qty, l.missing, l.subtotal])).toEqual([
+      [2, 1, 100],
+      [1, 1, null],
+    ]);
+    expect(cartTotals(short)).toEqual({ units: 3, amount: 100, unpricedUnits: 0, missingUnits: 2 });
 
     const updates = buildOrderUpdates(c, qty, 'Noa');
     expect(updates).toContainEqual({ row: 3, col: 6, value: 2 });

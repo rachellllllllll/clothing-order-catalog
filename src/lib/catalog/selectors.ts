@@ -1,3 +1,5 @@
+import type { ShortageLine } from '../../../api/_types';
+import { missingQty, shortageIndex } from './shortages';
 import type { Catalog, CartLine, CatalogItem, ModelGroup, QtyMap, SizeFilterMode, SortMode } from './types';
 
 export function qtyOf(qty: QtyMap, itemId: string, size: string): number {
@@ -108,17 +110,32 @@ export function cartLines(catalog: Catalog, qty: QtyMap): CartLine[] {
   return lines;
 }
 
+/** Marks the units that did not arrive; their price is left out of the subtotal. */
+export function withShortages(lines: CartLine[], shortages: readonly ShortageLine[]): CartLine[] {
+  if (!shortages.length) return lines;
+  const index = shortageIndex(shortages);
+  return lines.map((l) => {
+    const missing = missingQty(index, l.itemId, l.size, l.qty);
+    return missing ? { ...l, missing, subtotal: l.price == null ? null : l.price * (l.qty - missing) } : l;
+  });
+}
+
 export interface CartTotals {
   units: number;
+  /** To pay: the units that arrived. */
   amount: number;
+  /** Arrived units with no price. */
   unpricedUnits: number;
+  missingUnits: number;
 }
 
 export function cartTotals(lines: CartLine[]): CartTotals {
-  const t: CartTotals = { units: 0, amount: 0, unpricedUnits: 0 };
+  const t: CartTotals = { units: 0, amount: 0, unpricedUnits: 0, missingUnits: 0 };
   for (const l of lines) {
+    const missing = l.missing ?? 0;
     t.units += l.qty;
-    if (l.subtotal == null) t.unpricedUnits += l.qty;
+    t.missingUnits += missing;
+    if (l.subtotal == null) t.unpricedUnits += l.qty - missing;
     else t.amount += l.subtotal;
   }
   return t;

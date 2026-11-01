@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { groupLinesByModel } from '../lib/catalog/selectors';
-import { formatSavedAt, normalizeText, toMoney } from '../lib/catalog/text';
+import { formatSavedAt, normalizeText, notArrived, toMoney } from '../lib/catalog/text';
 import type { CartLine } from '../lib/catalog/types';
-import { useCart, useExportOrder, useSendOrder } from '../store/cartHooks';
+import { useCart, useSendOrder } from '../store/cartHooks';
 import { useImage } from '../store/hooks';
 import { isReadOnly, useOrderStore } from '../store/orderStore';
 import { PrintArea } from './PrintArea';
@@ -56,7 +56,6 @@ export function CartModal() {
   const clearAll = useOrderStore((s) => s.clearAll);
   const readOnly = useOrderStore(isReadOnly);
   const { lines, totals } = useCart();
-  const { exportOrder, disabledReason } = useExportOrder();
   const send = useSendOrder();
   const [printing, setPrinting] = useState(false);
 
@@ -109,15 +108,6 @@ export function CartModal() {
                 {send.label}
               </button>
             )}
-            <button
-              type="button"
-              className={send.signedIn ? 'btn-secondary' : 'btn-primary'}
-              disabled={!!disabledReason}
-              title={disabledReason}
-              onClick={exportOrder}
-            >
-              הורדת קובץ הזמנה
-            </button>
             {!readOnly && (
               <button type="button" className="btn-secondary" disabled={totals.units === 0} onClick={onEmpty}>
                 🗑 רוקן סל
@@ -131,7 +121,6 @@ export function CartModal() {
             </button>
           </div>
         </div>
-        {disabledReason && totals.units > 0 && !send.signedIn && <div className="muted">{disabledReason}</div>}
         {send.signedIn && <SendStatus />}
         <SaveStatusText />
         <div className="cart-list">
@@ -153,6 +142,7 @@ function CartGroup({ model, lines }: { model: string; lines: CartLine[] }) {
   const removeLine = useOrderStore((s) => s.removeLine);
   const readOnly = useOrderStore(isReadOnly);
   const units = lines.reduce((s, l) => s + l.qty, 0);
+  const missing = lines.reduce((s, l) => s + (l.missing ?? 0), 0);
   const amount = lines.reduce((s, l) => (l.subtotal != null ? s + l.subtotal : s), 0);
   const hasNoPrice = lines.some((l) => l.price == null);
 
@@ -165,18 +155,34 @@ function CartGroup({ model, lines }: { model: string; lines: CartLine[] }) {
         <div className="cart-group-info">
           <strong>{model}</strong>
           <div className="muted">
-            {units} יחידות{hasNoPrice ? '' : ' | ' + toMoney(amount)}
+            {units} יחידות{missing > 0 ? ` (${notArrived(missing)})` : ''}{hasNoPrice ? '' : ' | ' + toMoney(amount)}
           </div>
         </div>
       </div>
       <div className="cart-group-rows">
         {lines.map((l) => (
-          <div className="cart-group-row" key={l.itemId + '|' + l.size}>
+          <div className={'cart-group-row' + (l.missing ? ' short' : '')} key={l.itemId + '|' + l.size}>
             <span className="chip">{l.color}</span>
             <span>
               {l.size} × {l.qty}
             </span>
-            <span className="row-price">{l.subtotal == null ? 'ללא מחיר' : toMoney(l.subtotal)}</span>
+            {!!l.missing && (
+              <span className="chip chip-short">
+                {l.missing < l.qty
+                  ? `${notArrived(l.missing)} מהספק`
+                  : l.qty === 1
+                    ? 'לא הגיע מהספק'
+                    : 'כל היחידות לא הגיעו מהספק'}
+              </span>
+            )}
+            <span className="row-price">
+              {l.subtotal == null ? 'ללא מחיר' : toMoney(l.subtotal)}
+              {!!l.missing && l.price != null && (
+                <s className="row-price-was" title="הסכום לפני ההפחתה של מה שלא הגיע">
+                  {toMoney(l.price * l.qty)}
+                </s>
+              )}
+            </span>
             {!readOnly && (
               <button
                 type="button"

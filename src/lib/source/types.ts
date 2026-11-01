@@ -1,3 +1,5 @@
+import type { Catalog } from '../catalog/types';
+
 export interface ImageRef {
   /** Small image for cards, thumbnails and print. */
   thumb: string;
@@ -7,8 +9,11 @@ export interface ImageRef {
 
 export interface CatalogSource {
   kind: 'drive' | 'local';
+  /** The catalog file name (the round name for rounds edited on the admin page) — shown on the printout. */
   excelName: string;
-  excelData: ArrayBuffer;
+  /** The catalog Excel file; null for rounds edited on the admin page (no order file to fill in). */
+  excelData: ArrayBuffer | null;
+  catalog: Catalog;
   /** Stable catalog identity (its file name, not its modified time) — scopes the saved draft. */
   catalogKey: string;
   /** normalizeText(image file base name) -> image URLs */

@@ -154,6 +154,64 @@ export async function updateProperties(fileId: string, appProperties: Record<str
   return normalize(await res.json());
 }
 
+export async function renameFile(fileId: string, name: string): Promise<AppFile> {
+  const url = new URL(FILES_API + '/' + encodeURIComponent(fileId));
+  url.searchParams.set('fields', FILE_FIELDS);
+  const res = await gfetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return normalize(await res.json());
+}
+
+/** "Anyone with the link – Viewer" (inherited by everything inside a folder). Repeating it changes nothing. */
+export async function shareWithAnyone(fileId: string): Promise<void> {
+  const url = new URL(FILES_API + '/' + encodeURIComponent(fileId) + '/permissions');
+  url.searchParams.set('fields', 'id');
+  await gfetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'reader', type: 'anyone' }),
+  });
+}
+
+/** Uploads a binary file (e.g. an image) with its metadata in one request. */
+export async function createBinaryFile(
+  parentId: string,
+  name: string,
+  mimeType: string,
+  appProperties: Record<string, string>,
+  data: Uint8Array,
+): Promise<AppFile> {
+  const url = new URL(UPLOAD_API);
+  url.searchParams.set('uploadType', 'multipart');
+  url.searchParams.set('fields', FILE_FIELDS);
+  const boundary = 'orderui-' + randomBytes(12).toString('hex');
+  const head =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+    JSON.stringify({ name, parents: [parentId], mimeType, appProperties }) +
+    `\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`;
+  const body = Buffer.concat([Buffer.from(head, 'utf8'), data, Buffer.from(`\r\n--${boundary}--`, 'utf8')]);
+  const res = await gfetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+    body: new Uint8Array(body),
+  });
+  return normalize(await res.json());
+}
+
+/** Moves the file to the Drive trash (the owner can still restore it from there). */
+export async function trashFile(fileId: string): Promise<void> {
+  const url = new URL(FILES_API + '/' + encodeURIComponent(fileId));
+  url.searchParams.set('fields', 'id');
+  await gfetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trashed: true }),
+  });
+}
+
 export async function readJson(fileId: string): Promise<unknown> {
   const url = new URL(FILES_API + '/' + encodeURIComponent(fileId));
   url.searchParams.set('alt', 'media');
@@ -183,11 +241,17 @@ export async function createJsonFile(
   return normalize(await res.json());
 }
 
-export async function updateJsonFile(fileId: string, appProperties: Record<string, string>, data: unknown): Promise<AppFile> {
+/** Replaces the content and merges into the appProperties; `name` also renames the file. */
+export async function updateJsonFile(
+  fileId: string,
+  appProperties: Record<string, string>,
+  data: unknown,
+  name?: string,
+): Promise<AppFile> {
   const url = new URL(UPLOAD_API + '/' + encodeURIComponent(fileId));
   url.searchParams.set('uploadType', 'multipart');
   url.searchParams.set('fields', FILE_FIELDS);
-  const { body, contentType } = multipart({ appProperties }, data);
+  const { body, contentType } = multipart(name ? { appProperties, name } : { appProperties }, data);
   const res = await gfetch(url, { method: 'PATCH', headers: { 'Content-Type': contentType }, body });
   return normalize(await res.json());
 }

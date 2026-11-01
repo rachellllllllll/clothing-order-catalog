@@ -57,6 +57,9 @@ export interface CartLine {
   size: string;
   qty: number;
   price: number | null;
+  /** Price of the units that arrived (all of them, unless some are marked as not arrived). */
   subtotal: number | null;
   notes: string;
+  /** Units marked by the admin as not arrived from the supplier. */
+  missing?: number;
 }

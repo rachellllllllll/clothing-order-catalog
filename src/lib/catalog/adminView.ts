@@ -1,5 +1,5 @@
-import type { OrderDto, OrderLine, OrderSummary } from '../../../api/_types';
-import type { CombineMode } from './combinedOrder';
+import type { OrderDto, OrderLine, OrderSummary, ShortageLine, Shortages } from '../../../api/_types';
+import { missingQty, shortageIndex } from './shortages';
 import type { Catalog, CatalogItem } from './types';
 
 /** Orderers list filter: every order, sent (in any version), never sent, or changed after sending. */
@@ -20,37 +20,70 @@ export function matchesStatus(o: OrderSummary, filter: StatusFilter): boolean {
   }
 }
 
-/** The lines of the chosen version ('submitted' = the last sent one, none if never sent). */
-export function versionLines(order: OrderDto, version: CombineMode): OrderLine[] {
-  return (version === 'submitted' ? order.submitted?.lines : order.lines) ?? [];
+/** The lines of the last sent version — what is ordered from the supplier and charged (none if never sent). */
+export function sentLines(order: OrderDto): OrderLine[] {
+  return order.submitted?.lines ?? [];
 }
 
 export interface Totals {
+  /** Ordered units. */
   units: number;
-  /** Sum of priced units (catalog price × qty). */
+  /** To pay: catalog price × the units that arrived. */
   amount: number;
-  /** Units with no price in the catalog (or no longer in it). */
+  /** Arrived units with no price in the catalog (or no longer in it). */
   unpricedUnits: number;
+  /** Units marked as not arrived from the supplier, and their catalog price (left out of `amount`). */
+  missingUnits: number;
+  missingAmount: number;
 }
 
-export function linesTotals(catalog: Catalog, lines: readonly OrderLine[]): Totals {
-  const t: Totals = { units: 0, amount: 0, unpricedUnits: 0 };
-  for (const l of lines) {
-    t.units += l.qty;
-    const price = catalog.itemById.get(l.id)?.price;
-    if (price == null) t.unpricedUnits += l.qty;
-    else t.amount += price * l.qty;
+export const emptyTotals = (): Totals => ({ units: 0, amount: 0, unpricedUnits: 0, missingUnits: 0, missingAmount: 0 });
+
+export function addTotals(sum: Totals, t: Totals): void {
+  sum.units += t.units;
+  sum.amount += t.amount;
+  sum.unpricedUnits += t.unpricedUnits;
+  sum.missingUnits += t.missingUnits;
+  sum.missingAmount += t.missingAmount;
+}
+
+function addUnits(t: Totals, price: number | null | undefined, qty: number, missing: number) {
+  t.units += qty;
+  t.missingUnits += missing;
+  if (price == null) t.unpricedUnits += qty - missing;
+  else {
+    t.amount += price * (qty - missing);
+    t.missingAmount += price * missing;
   }
+}
+
+export function linesTotals(catalog: Catalog, lines: readonly OrderLine[], shortages?: readonly ShortageLine[]): Totals {
+  const t = emptyTotals();
+  const index = shortageIndex(shortages);
+  for (const l of lines) addUnits(t, catalog.itemById.get(l.id)?.price, l.qty, missingQty(index, l.id, l.size, l.qty));
   return t;
+}
+
+export interface WhoOrdered {
+  fileId: string;
+  name: string;
+  qty: number;
+  /** Units of this line marked as not arrived. */
+  missing: number;
 }
 
 export interface ProductRow {
   item: CatalogItem;
   /** size label -> ordered quantity */
   qty: Record<string, number>;
+  /** size label -> units that did not arrive */
+  missing: Record<string, number>;
   /** size label -> who ordered it (by name) */
-  who: Record<string, { name: string; qty: number }[]>;
+  who: Record<string, WhoOrdered[]>;
   units: number;
+  missingUnits: number;
+  /** Units not sent yet: drafts and changes since sending (current − sent; negative when units were removed). */
+  pending: number;
 }
 
 export interface ProductsView {
@@ -64,34 +97,43 @@ export interface ProductsView {
   missing: { name: string; line: OrderLine }[];
 }
 
-/** All orders of a round summed per catalog item and size — the combined Excel, as data for the screen. */
-export function productsView(catalog: Catalog, orders: readonly OrderDto[], version: CombineMode): ProductsView {
+/** The sent version of all orders of a round (by order file id) summed per catalog item and size. */
+export function productsView(catalog: Catalog, orders: ReadonlyMap<string, OrderDto>, shortages: Shortages = {}): ProductsView {
   const sizeLabels = catalog.columns.sizeCols.map((s) => s.label);
   const knownSizes = new Set(sizeLabels);
-  const rows = new Map<string, ProductRow>(catalog.items.map((item) => [item.id, { item, qty: {}, who: {}, units: 0 }]));
+  const rows = new Map<string, ProductRow>(
+    catalog.items.map((item) => [item.id, { item, qty: {}, missing: {}, who: {}, units: 0, missingUnits: 0, pending: 0 }]),
+  );
   const missing: ProductsView['missing'] = [];
 
-  const sorted = [...orders].sort((a, b) => a.name.localeCompare(b.name, 'he'));
-  for (const order of sorted) {
-    for (const line of versionLines(order, version)) {
+  const sorted = [...orders].sort(([, a], [, b]) => a.name.localeCompare(b.name, 'he'));
+  for (const [fileId, order] of sorted) {
+    for (const line of order.lines) {
+      const row = rows.get(line.id);
+      if (row && knownSizes.has(line.size)) row.pending += line.qty;
+    }
+    const index = shortageIndex(shortages[fileId]);
+    for (const line of sentLines(order)) {
       const row = rows.get(line.id);
       if (!row || !knownSizes.has(line.size)) {
         missing.push({ name: order.name, line });
         continue;
       }
+      row.pending -= line.qty;
+      const short = missingQty(index, line.id, line.size, line.qty);
       row.qty[line.size] = (row.qty[line.size] ?? 0) + line.qty;
-      (row.who[line.size] ??= []).push({ name: order.name, qty: line.qty });
+      if (short) row.missing[line.size] = (row.missing[line.size] ?? 0) + short;
+      (row.who[line.size] ??= []).push({ fileId, name: order.name, qty: line.qty, missing: short });
       row.units += line.qty;
+      row.missingUnits += short;
     }
   }
 
   const sizeTotals: Record<string, number> = {};
-  const totals: Totals = { units: 0, amount: 0, unpricedUnits: 0 };
+  const totals = emptyTotals();
   for (const row of rows.values()) {
     for (const [size, qty] of Object.entries(row.qty)) sizeTotals[size] = (sizeTotals[size] ?? 0) + qty;
-    totals.units += row.units;
-    if (row.item.price == null) totals.unpricedUnits += row.units;
-    else totals.amount += row.item.price * row.units;
+    addUnits(totals, row.item.price, row.units, row.missingUnits);
   }
 
   return { rows: [...rows.values()], sizes: sizeLabels.filter((s) => sizeTotals[s]), sizeTotals, totals, missing };

@@ -19,34 +19,53 @@ async function catalog() {
 }
 
 describe('productsView', () => {
-  it('sums the chosen version per item and size, with who ordered what', async () => {
+  it('sums the sent version per item and size, with who ordered what and what is not sent yet', async () => {
     const cat = await catalog();
     const [coat, hat] = cat.items;
-    const orders = [
-      order('רונית', [l(coat.id, 'M', 5)], [l(coat.id, 'M', 1), l(hat.id, 'S', 2)]),
-      order('אבי', [l(coat.id, 'L', 1)], [l(coat.id, 'M', 2), l('gone|item', 'S', 1), l(coat.id, 'XL', 1)]),
-      order('דנה', [l(coat.id, 'M', 1)], null),
-    ];
+    const orders = new Map([
+      ['f1', order('רונית', [l(coat.id, 'M', 5)], [l(coat.id, 'M', 1), l(hat.id, 'S', 2)])],
+      ['f2', order('אבי', [l(coat.id, 'L', 1)], [l(coat.id, 'M', 2), l('gone|item', 'S', 1), l(coat.id, 'XL', 1)])],
+      ['f3', order('דנה', [l(coat.id, 'M', 1)], null)],
+    ]);
 
-    const sent = productsView(cat, orders, 'submitted');
+    const sent = productsView(cat, orders);
     const coatRow = sent.rows.find((r) => r.item.id === coat.id)!;
     expect(coatRow.qty).toEqual({ M: 3 });
     expect(coatRow.who.M).toEqual([
-      { name: 'אבי', qty: 2 },
-      { name: 'רונית', qty: 1 },
+      { fileId: 'f2', name: 'אבי', qty: 2, missing: 0 },
+      { fileId: 'f1', name: 'רונית', qty: 1, missing: 0 },
     ]);
     expect(sent.sizes).toEqual(['S', 'M']);
     expect(sent.sizeTotals).toEqual({ S: 2, M: 3 });
-    expect(sent.totals).toEqual({ units: 5, amount: 600, unpricedUnits: 2 });
+    expect(sent.totals).toEqual({ units: 5, amount: 600, unpricedUnits: 2, missingUnits: 0, missingAmount: 0 });
     expect(sent.missing.map((m) => [m.name, m.line.id, m.line.size])).toEqual([
       ['אבי', 'gone|item', 'S'],
       ['אבי', coat.id, 'XL'],
     ]);
+    // Current coat units: 5 + 1 (L) + 1 (draft) = 7 against 3 sent; the hat was removed (2 sent, 0 now).
+    expect(coatRow.pending).toBe(4);
+    expect(sent.rows.find((r) => r.item.id === hat.id)!.pending).toBe(-2);
+  });
 
-    const current = productsView(cat, orders, 'current');
-    expect(current.sizes).toEqual(['M', 'L']);
-    expect(current.totals.units).toBe(7);
-    expect(current.missing).toEqual([]);
+  it('counts units that did not arrive, never more than were ordered', async () => {
+    const cat = await catalog();
+    const [coat] = cat.items;
+    const orders = new Map([
+      ['f1', order('רונית', [l(coat.id, 'M', 1)], [l(coat.id, 'M', 1)])],
+      ['f2', order('אבי', [l(coat.id, 'M', 3)], [l(coat.id, 'M', 3)])],
+    ]);
+    const view = productsView(cat, orders, {
+      f1: [{ id: coat.id, size: 'M', qty: 5 }],
+      f2: [{ id: coat.id, size: 'M', qty: 1 }, { id: coat.id, size: 'L', qty: 1 }],
+    });
+    const row = view.rows.find((r) => r.item.id === coat.id)!;
+    expect(row.missing).toEqual({ M: 2 });
+    expect(row.missingUnits).toBe(2);
+    expect(row.who.M.map((w) => [w.name, w.qty, w.missing])).toEqual([
+      ['אבי', 3, 1],
+      ['רונית', 1, 1],
+    ]);
+    expect(view.totals).toEqual({ units: 4, amount: 400, unpricedUnits: 0, missingUnits: 2, missingAmount: 400 });
   });
 });
 
@@ -77,6 +96,24 @@ describe('linesTotals', () => {
       units: 6,
       amount: 400,
       unpricedUnits: 4,
+      missingUnits: 0,
+      missingAmount: 0,
+    });
+  });
+
+  it('leaves units that did not arrive out of the amount to pay', async () => {
+    const cat = await catalog();
+    const [coat, hat] = cat.items;
+    const short = [
+      { id: coat.id, size: 'M', qty: 1 },
+      { id: hat.id, size: 'S', qty: 1 },
+    ];
+    expect(linesTotals(cat, [l(coat.id, 'M', 2), l(hat.id, 'S', 1)], short)).toEqual({
+      units: 3,
+      amount: 200,
+      unpricedUnits: 0,
+      missingUnits: 2,
+      missingAmount: 200,
     });
   });
 });
@@ -90,7 +127,6 @@ describe('matchesStatus', () => {
     updatedAt: '',
     submittedAt,
     submittedRev,
-    hasPin: true,
   });
 
   it('tells sent, unsent and changed-after-send orders apart', () => {

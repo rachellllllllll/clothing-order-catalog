@@ -113,6 +113,7 @@
 }
 
 .size-box .label { font-size: 12px; color: var(--muted); text-align: center; }
+.size-short { font-size: 11px; color: var(--warn); text-align: center; direction: rtl; }
 
 .counter {
   display: flex;

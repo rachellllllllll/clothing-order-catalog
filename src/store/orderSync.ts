@@ -1,46 +1,71 @@
 /**
- * Server orders for Drive rounds: sign-in (name + PIN), debounced autosave, "send order",
- * conflict handling between devices, and a local backup so edits survive being offline.
+ * Server orders for Drive rounds: sign-in (name + PIN, before choosing a round), opening the order in each round,
+ * debounced autosave, "send order", conflict handling between devices, and a local backup so edits survive being offline.
  */
-import type { OrderLine, OrderResponse } from '../../api/_types';
+import type { OrderLine, OrderResponse, SigninResponse } from '../../api/_types';
 import { ApiError, apiPost } from '../lib/api/client';
 import { linesKey, linesToQty, qtyToLines } from '../lib/catalog/draft';
-import { readBackup, readStorage, unitsOf, useOrderStore, writeBackup, writeStorage, INITIAL_SYNC } from './orderStore';
+import {
+  readBackup,
+  readStorage,
+  unitsOf,
+  useOrderStore,
+  writeBackup,
+  writeStorage,
+  INITIAL_SYNC,
+  type Account,
+} from './orderStore';
 
 type State = ReturnType<typeof useOrderStore.getState>;
 
 const SAVE_DELAY_MS = 1500;
 const RETRY_DELAY_MS = 15000;
-const sessionKey = (roundId: string) => 'orderUi:session:' + roundId;
+const MEMBER_KEY = 'orderUi:member';
 
 const get = useOrderStore.getState;
 const set = useOrderStore.setState;
 
-// ── Stored sessions (one per round, so each round remembers who signed in on this device) ──
+// ── Stored sign-in (one per device, for every round) ──
 
-export interface StoredSession {
-  name: string;
-  token: string;
-}
-
-export function readSession(roundId: string): StoredSession | null {
+function readMember(): Account | null {
   try {
-    const s = JSON.parse(readStorage(sessionKey(roundId)) ?? 'null') as StoredSession | null;
+    const s = JSON.parse(readStorage(MEMBER_KEY) ?? 'null') as Account | null;
     return s && typeof s.name === 'string' && typeof s.token === 'string' ? s : null;
   } catch {
     return null;
   }
 }
 
-function writeSession(roundId: string, session: StoredSession | null) {
-  if (session) writeStorage(sessionKey(roundId), JSON.stringify(session));
+function writeMember(member: Account | null) {
+  if (member) writeStorage(MEMBER_KEY, JSON.stringify(member));
   else {
     try {
-      localStorage.removeItem(sessionKey(roundId));
+      localStorage.removeItem(MEMBER_KEY);
     } catch {
       // ignore
     }
   }
+}
+
+set({ member: readMember() });
+
+/** Ends the sign-in on this device. The local backup keeps unsaved edits; they come back after signing in again. */
+function dropMember(notice: string | null) {
+  writeMember(null);
+  set({
+    member: null,
+    account: null,
+    authPending: false,
+    authNotice: notice,
+    sync: INITIAL_SYNC,
+    conflict: null,
+    shortages: [],
+    qty: {},
+    resumeNotice: null,
+    missingNotice: null,
+    lastRemoved: null,
+    cartOpen: false,
+  });
 }
 
 // ── Helpers ──
@@ -108,10 +133,8 @@ function handleError(snap: State, err: unknown, mine: OrderLine[]) {
       round: { ...s.round, ...(e.data.round as object) },
       sync: { ...s.sync, status: 'error', error: 'השינויים האחרונים לא נשמרו: ' + e.message },
     });
-  } else if (e.status === 401 && s.round) {
-    // The local backup keeps the edits; they come back after signing in again.
-    writeSession(s.round.id, null);
-    set({ account: null, sync: INITIAL_SYNC, conflict: null, qty: {}, authNotice: e.message });
+  } else if (e.status === 401) {
+    dropMember(e.message);
   } else {
     set({ sync: { ...s.sync, status: 'error', error: e.message } });
     window.clearTimeout(retryTimer);
@@ -165,8 +188,8 @@ useOrderStore.subscribe((s, prev) => {
   // Leaving a round (switch / local folder) with unsaved edits: save the old state right away.
   if (s.source !== prev.source && prev.account && hasUnsavedChanges(prev)) void saveNow(prev, true);
 
-  // A round opened: sign in again with the stored session.
-  if (s.round && s.round.id !== prev.round?.id && s.source?.kind === 'drive') void resumeSession();
+  // A round opened: open the member's order in it.
+  if (s.round && s.round.id !== prev.round?.id && s.source?.kind === 'drive') void openOrder();
 
   if (s.account && s.account === prev.account && s.source === prev.source && s.qty !== prev.qty) {
     backup(s);
@@ -220,61 +243,43 @@ function applyLogin(res: OrderResponse, token: string) {
     resumeNotice: units > 0 && !conflict ? { units, updatedAt: server.updatedAt } : null,
     lastRemoved: null,
     sync: { ...INITIAL_SYNC, rev: server.rev, serverKey, submitted: server.submitted, savedAt: server.updatedAt },
+    shortages: res.shortages ?? [],
   });
-  writeSession(round.id, { name: server.name, token });
   if (lines !== server.lines) scheduleSave();
 }
 
-export type LoginResult = 'ok' | 'not_found';
-
-/** Signs in to the open round. 'not_found' means no order with this name yet — ask, then call with create. */
-export async function login(name: string, pin: string, create = false): Promise<LoginResult> {
-  const round = get().round;
-  if (!round) return 'ok';
-  try {
-    const res = await apiPost<OrderResponse>('/api/order', { action: 'login', round: round.id, name, pin, create });
-    if (get().round?.id !== round.id) return 'ok';
-    applyLogin(res, res.token!);
-    if (res.pinSet) {
-      get().setStatus(create ? 'נפתחה הזמנה חדשה. זכרו את הקוד — תצטרכו אותו בכניסה הבאה.' : 'נקבע קוד חדש להזמנה שלך.');
-    }
-    return 'ok';
-  } catch (err) {
-    if (err instanceof ApiError && err.code === 'not_found') return 'not_found';
-    throw err;
-  }
+/** Signs in with the name and code from the orderers list, then opens the order in the open round (if any). */
+export async function signIn(name: string, pin: string): Promise<void> {
+  const res = await apiPost<SigninResponse>('/api/order', { action: 'signin', name, pin });
+  const member = { name: res.name, token: res.token };
+  writeMember(member);
+  set({ member, authNotice: null, signer: res.name });
+  void openOrder();
 }
 
-async function resumeSession() {
-  const round = get().round;
-  const session = round && readSession(round.id);
-  if (!round || !session) return;
+/** Opens the signed-in member's order in the open round (created on the first visit while the round is open). */
+export async function openOrder(): Promise<void> {
+  const { round, member, source } = get();
+  if (!round || !member || source?.kind !== 'drive') return;
+  const current = () => get().round?.id === round.id && get().member === member;
   set({ authPending: true, authNotice: null });
   try {
-    const res = await apiPost<OrderResponse>('/api/order', { action: 'load' }, { token: session.token });
-    if (get().round?.id === round.id) applyLogin(res, session.token);
+    const res = await apiPost<OrderResponse>('/api/order', { action: 'open', round: round.id }, { token: member.token });
+    if (!current()) return;
+    applyLogin(res, res.token!);
+    if (res.created) get().setStatus('נפתחה לך הזמנה חדשה בסבב הזה.');
   } catch (err) {
-    if (get().round?.id !== round.id) return;
-    if (err instanceof ApiError && err.status === 401) writeSession(round.id, null);
-    set({ authPending: false, authNotice: err instanceof Error ? err.message : String(err) });
+    if (!current()) return;
+    if (err instanceof ApiError && err.status === 401) dropMember(err.message);
+    else set({ authPending: false, authNotice: err instanceof Error ? err.message : String(err) });
   }
 }
 
+/** Signs out on this device (e.g. so someone else can order), after saving. */
 export async function logout(): Promise<void> {
   await saveNow();
-  const s = get();
-  if (s.round) writeSession(s.round.id, null);
-  set({
-    account: null,
-    sync: INITIAL_SYNC,
-    conflict: null,
-    qty: {},
-    resumeNotice: null,
-    missingNotice: null,
-    lastRemoved: null,
-    cartOpen: false,
-    status: { message: '', isError: false },
-  });
+  dropMember(null);
+  set({ status: { message: '', isError: false } });
 }
 
 // ── Send ──

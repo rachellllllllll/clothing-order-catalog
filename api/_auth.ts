@@ -6,19 +6,19 @@
  *                     (changing it signs everyone out, nothing else)
  *   ADMIN_PASSWORD  – shared password of the admin page (at least 8 characters)
  */
-import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { HttpError } from './_drive.js';
 import { getFile, ordersRootId, updateProperties } from './_google.js';
 
 const MAX_BODY_BYTES = 1_000_000;
 
 /** Parses a JSON POST body. Requiring the JSON content type blocks cross-site form posts (CSRF). */
-export async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+export async function readJsonBody(request: Request, maxBytes = MAX_BODY_BYTES): Promise<Record<string, unknown>> {
   if (!(request.headers.get('content-type') || '').includes('application/json')) {
     throw new HttpError(415, 'Expected a JSON body.');
   }
   const text = await request.text();
-  if (text.length > MAX_BODY_BYTES) throw new HttpError(413, 'Request too large.');
+  if (text.length > maxBytes) throw new HttpError(413, 'Request too large.');
   try {
     const body = JSON.parse(text) as unknown;
     if (body && typeof body === 'object' && !Array.isArray(body)) return body as Record<string, unknown>;
@@ -79,8 +79,13 @@ export interface StoredPin {
 }
 
 export function parsePin(raw: unknown): string {
-  if (typeof raw !== 'string' || !/^\d{4}$/.test(raw)) throw new HttpError(400, 'הקוד צריך להיות 4 ספרות.', 'bad_pin');
+  if (typeof raw !== 'string' || !/^\d{6}$/.test(raw)) throw new HttpError(400, 'הקוד צריך להיות 6 ספרות.', 'bad_pin');
   return raw;
+}
+
+/** A random 6-digit sign-in code, issued by the admin. */
+export function generatePin(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
 export function hashPin(pin: string): StoredPin {
