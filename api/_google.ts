@@ -212,6 +212,12 @@ export async function trashFile(fileId: string): Promise<void> {
   });
 }
 
+export async function downloadFile(fileId: string): Promise<ArrayBuffer> {
+  const url = new URL(FILES_API + '/' + encodeURIComponent(fileId));
+  url.searchParams.set('alt', 'media');
+  return (await gfetch(url)).arrayBuffer();
+}
+
 export async function readJson(fileId: string): Promise<unknown> {
   const url = new URL(FILES_API + '/' + encodeURIComponent(fileId));
   url.searchParams.set('alt', 'media');

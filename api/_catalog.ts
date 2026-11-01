@@ -12,8 +12,10 @@ import {
   createBinaryFile,
   createFolder,
   createJsonFile,
+  downloadFile,
   findFiles,
   FOLDER_MIME,
+  getFile,
   ordersRootId,
   q,
   readJson,
@@ -183,11 +185,21 @@ function imageFiles(folderId: string): Promise<AppFile[]> {
   return findFiles(`${q(folderId)} in parents and trashed = false and appProperties has { key='kind' and value='image' }`);
 }
 
+/** Served by /api/image (Drive's own thumbnail links don't work for files uploaded by the app). */
 export function imageUrls(id: string): ImageUrls {
-  const fake = process.env.FAKE_IMAGE_BASE; // dev server with the in-memory Drive
-  if (fake) return { thumb: fake + encodeURIComponent(id), full: fake + encodeURIComponent(id) };
-  const url = (w: number) => `https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w${w}`;
-  return { thumb: url(600), full: url(2000) };
+  const url = '/api/image?id=' + encodeURIComponent(id);
+  return { thumb: url, full: url };
+}
+
+/** A product image uploaded on the admin page (only files marked as such — never orders or members). */
+export async function readImage(rawId: unknown): Promise<{ mime: string; data: ArrayBuffer }> {
+  if (typeof rawId !== 'string' || !/^[\w-]{10,100}$/.test(rawId)) throw new HttpError(400, 'Invalid image id.');
+  const file = await getFile(rawId);
+  if (file.appProperties.kind !== 'image') throw new HttpError(404, 'Not found.', 'not_found');
+  const data = await downloadFile(rawId);
+  const type = imageType(new Uint8Array(data));
+  if (!type) throw new HttpError(404, 'Not found.', 'not_found');
+  return { mime: type.mime, data };
 }
 
 async function loadDoc(folder: AppFile): Promise<{ doc: CatalogDoc; rev: number; file: AppFile | null; images: AppFile[] }> {
