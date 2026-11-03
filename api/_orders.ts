@@ -22,7 +22,7 @@ import {
   updateProperties,
   type AppFile,
 } from './_google.js';
-import { memberLogin, nameKey, sessionMember, sessionStamp, type StoredMember } from './_members.js';
+import { memberLinkLogin, memberLogin, nameKey, sessionMember, sessionStamp, type StoredMember } from './_members.js';
 import { findAppRound, findRound, listAllRounds, type RoundRef } from './_rounds.js';
 import type {
   OrderDto,
@@ -245,7 +245,15 @@ const sessionExpired = () => new HttpError(401, 'פג תוקף הכניסה — 
 
 /** Signs in a member of the orderers list (before choosing a round). */
 export async function signin(name: string, pin: string): Promise<SigninResponse> {
-  const { id, member } = await memberLogin(name, pin);
+  return memberSignin(await memberLogin(name, pin));
+}
+
+/** Signs in with the personal link the admin mailed to the member. */
+export async function linkSignin(key: unknown): Promise<SigninResponse> {
+  return memberSignin(await memberLinkLogin(key));
+}
+
+function memberSignin({ id, member }: { id: string; member: StoredMember }): SigninResponse {
   const token = signToken({ k: 'member', m: id, p: sessionStamp(member), exp: Date.now() + TOKEN_MS });
   return { name: member.name, token };
 }

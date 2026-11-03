@@ -1,6 +1,6 @@
 /**
- * All order rounds: folders of the shared Drive catalog (an Excel file + images, see _drive.ts)
- * and rounds created on the admin page (a JSON catalog, see _catalog.ts).
+ * All order rounds: rounds created on the admin page (a JSON catalog, see _catalog.ts).
+ * Legacy Excel-folder rounds (_drive.ts) are listed too, only if GOOGLE_API_KEY + DRIVE_FOLDER_ID are set.
  */
 import { listAppRounds } from './_catalog.js';
 import { driveCatalogConfigured, HttpError, listRounds, validRoundId } from './_drive.js';

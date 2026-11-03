@@ -11,6 +11,8 @@ function linkName(): string {
 export function LoginPanel() {
   const notice = useOrderStore((s) => s.authNotice);
   const savedName = useOrderStore((s) => s.signer);
+  // Signing in with a personal link (before anyone is signed in on this device).
+  const linkPending = useOrderStore((s) => s.authPending);
   const [name, setName] = useState(() => linkName() || savedName);
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
@@ -18,6 +20,8 @@ export function LoginPanel() {
 
   const cleanName = name.replace(/\s+/g, ' ').trim();
   const valid = cleanName.length >= 2 && /^\d{6}$/.test(pin);
+
+  if (linkPending) return <section className="panel login-panel muted">נכנסים עם הקישור האישי…</section>;
 
   async function submit() {
     setBusy(true);

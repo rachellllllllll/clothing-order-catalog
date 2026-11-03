@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { IssuedCode, MemberDto, NewMember } from '../../api/_types';
 import { ApiError, apiPost } from '../lib/api/client';
 import { formatSavedAt } from '../lib/catalog/text';
+import { MailAppPicker } from './AnnounceMail';
+import { linkBlock, mailHref, personalLink, readMailApp, type MailApp, type MailDraft } from './mail';
 import { errText } from './RoundAdmin';
 
 type Skipped = { name: string; reason: 'duplicate' | 'invalid' };
@@ -17,21 +19,36 @@ const byName = (list: MemberDto[]) => [...list].sort((a, b) => a.name.localeComp
 
 const loginLink = (name: string) => `${window.location.origin}/?name=${encodeURIComponent(name)}`;
 
-/** What the admin pastes to the orderer: the link (with the name filled in), the name and the code. */
-const shareText = ({ member, code }: IssuedCode) =>
-  `כניסה להזמנת בגדים: ${loginLink(member.name)}\nשם: ${member.name}\nקוד: ${code}`;
+/** What the admin sends the orderer: the personal link, and the name and code (with a link that fills in the name). */
+const issuedMail = ({ member, code, link }: IssuedCode): MailDraft => ({
+  subject: 'פרטי הכניסה שלך להזמנת בגדים',
+  body:
+    `שלום ${member.name},\n\n` +
+    `כניסה ישירה להזמנת בגדים:\n${linkBlock(personalLink(link))}\n\n` +
+    `אפשר גם להיכנס עם השם והקוד:\n${loginLink(member.name)}\nשם: ${member.name}\nקוד: ${code}`,
+});
 
-const skippedText = (s: Skipped) => `${s.name} (${s.reason === 'duplicate' ? 'כבר ברשימה' : 'שם לא תקין'})`;
+const skippedText = (s: Skipped) => `${s.name} (${s.reason === 'duplicate' ? 'כבר ברשימה' : 'פרטים לא תקינים'})`;
 
-/** One person per line: a name, optionally followed by a comma or tab and a phone number (as pasted from a sheet). */
+/**
+ * One person per line: a name, optionally followed (after a comma or tab, as pasted from a sheet) by a phone
+ * number and/or an email address, in any order.
+ */
 export function parseMemberLines(text: string): NewMember[] {
   return text
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
     .map((line) => {
-      const m = /^(.+?)\s*[,\t]\s*([\d +()-]{7,20})$/.exec(line);
-      return m ? { name: m[1], phone: m[2].trim() } : { name: line };
+      const [name, ...rest] = line.split(/\s*[,\t]\s*/);
+      const entry: NewMember = { name };
+      for (const part of rest) {
+        if (!part) continue;
+        if (part.includes('@')) entry.email = part;
+        else if (/^[\d +()-]{7,20}$/.test(part)) entry.phone = part;
+        else return { name: line };
+      }
+      return entry;
     });
 }
 
@@ -108,7 +125,7 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
       setIssued({ title: `קוד חדש ל${m.name}`, codes: [res], skipped: [] });
     });
 
-  const update = (m: MemberDto, patch: { name?: string; phone?: string; active?: boolean }) =>
+  const update = (m: MemberDto, patch: { name?: string; phone?: string; email?: string; active?: boolean }) =>
     run(async () => {
       const res = await apiPost<{ member: MemberDto }>('/api/admin', { action: 'updateMember', id: m.id, ...patch });
       upsert(res.member);
@@ -134,7 +151,10 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
   };
 
   const query = search.trim().toLowerCase();
-  const visible = members?.filter((m) => !query || m.name.toLowerCase().includes(query) || m.phone.includes(query)) ?? null;
+  const visible =
+    members?.filter(
+      (m) => !query || m.name.toLowerCase().includes(query) || m.phone.includes(query) || m.email.toLowerCase().includes(query),
+    ) ?? null;
   const inactive = members?.filter((m) => !m.active).length ?? 0;
 
   return (
@@ -149,7 +169,7 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
         <input
           type="search"
           className="admin-search"
-          placeholder="חיפוש שם או טלפון…"
+          placeholder="חיפוש שם, טלפון או מייל…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -193,6 +213,7 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
               <tr>
                 <th>שם</th>
                 <th>טלפון</th>
+                <th>מייל</th>
                 <th className="admin-col-updated">כניסה אחרונה</th>
                 <th />
               </tr>
@@ -209,6 +230,9 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
                     </td>
                     <td>
                       <bdi dir="ltr">{m.phone}</bdi>
+                    </td>
+                    <td>
+                      <bdi dir="ltr">{m.email}</bdi>
                     </td>
                     <td className="admin-col-updated">
                       {m.lastLoginAt ? formatSavedAt(m.lastLoginAt) : <span className="muted">עדיין לא נכנס/ה</span>}
@@ -243,13 +267,14 @@ export function MembersAdmin({ onSignedOut }: { onSignedOut: () => void }) {
 function AddOne({ busy, onAdd, onCancel }: { busy: boolean; onAdd: (e: NewMember[]) => Promise<boolean>; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const valid = name.trim().length >= 2;
   return (
     <form
       className="admin-member-form"
       onSubmit={(e) => {
         e.preventDefault();
-        if (valid && !busy) void onAdd([{ name, phone }]);
+        if (valid && !busy) void onAdd([{ name, phone, email }]);
       }}
     >
       <div className="field">
@@ -259,6 +284,10 @@ function AddOne({ busy, onAdd, onCancel }: { busy: boolean; onAdd: (e: NewMember
       <div className="field">
         <label htmlFor="memberPhone">טלפון (לא חובה)</label>
         <input id="memberPhone" type="tel" dir="ltr" maxLength={20} value={phone} onChange={(e) => setPhone(e.target.value)} />
+      </div>
+      <div className="field">
+        <label htmlFor="memberEmail">מייל (לא חובה)</label>
+        <input id="memberEmail" type="email" dir="ltr" maxLength={100} value={email} onChange={(e) => setEmail(e.target.value)} />
       </div>
       <button type="submit" className="btn-primary btn-sm" disabled={!valid || busy}>
         הוספה וקבלת קוד
@@ -304,12 +333,12 @@ function AddMany({ busy, onAdd, onCancel, loadPast, onError }: AddManyProps) {
 
   return (
     <div className="admin-member-form admin-member-many">
-      <label htmlFor="memberLines">שם בכל שורה. אפשר להוסיף טלפון אחרי פסיק — או להדביק שתי עמודות מגיליון.</label>
+      <label htmlFor="memberLines">שם בכל שורה. אפשר להוסיף טלפון ו/או מייל אחרי פסיק — או להדביק עמודות מגיליון.</label>
       <textarea
         id="memberLines"
         rows={8}
         autoFocus
-        placeholder={'משה כהן, 050-1234567\nשרה לוי'}
+        placeholder={'משה כהן, 050-1234567, moshe@example.com\nשרה לוי, sara@example.com\nדני אברהם'}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
@@ -336,8 +365,11 @@ function AddMany({ busy, onAdd, onCancel, loadPast, onError }: AddManyProps) {
 
 function IssuedCodes({ issued, onClose }: { issued: Issued; onClose: () => void }) {
   const [copied, setCopied] = useState<ReadonlySet<string>>(new Set());
+  const [mailed, setMailed] = useState<ReadonlySet<string>>(new Set());
+  const [mailApp, setMailApp] = useState<MailApp>(readMailApp);
   const [error, setError] = useState('');
   const many = issued.codes.length > 1;
+  const anyEmail = issued.codes.some((c) => c.member.email);
 
   async function copy(text: string, ids: string[]) {
     try {
@@ -350,18 +382,23 @@ function IssuedCodes({ issued, onClose }: { issued: Issued; onClose: () => void 
   }
 
   const close = () =>
-    (copied.size > 0 || window.confirm('הקודים לא יוצגו שוב אחרי הסגירה (אפשר תמיד להנפיק קוד חדש). לסגור?')) && onClose();
+    (copied.size + mailed.size > 0 ||
+      window.confirm('הקודים לא יוצגו שוב אחרי הסגירה (אפשר תמיד להנפיק קוד חדש). לסגור?')) &&
+    onClose();
 
   return (
     <div className="admin-issued" role="status">
       <div className="admin-issued-head">
         <strong>{issued.title}</strong>
         <div className="admin-actions">
+          {anyEmail && <MailAppPicker value={mailApp} onChange={setMailApp} />}
           {many && (
             <button
               type="button"
-              className="btn-primary btn-sm"
-              onClick={() => void copy(issued.codes.map(shareText).join('\n\n'), issued.codes.map((c) => c.member.id))}
+              className="btn-secondary btn-sm"
+              onClick={() =>
+                void copy(issued.codes.map((c) => issuedMail(c).body).join('\n\n———\n\n'), issued.codes.map((c) => c.member.id))
+              }
             >
               העתקת הכל
             </button>
@@ -371,7 +408,10 @@ function IssuedCodes({ issued, onClose }: { issued: Issued; onClose: () => void 
           </button>
         </div>
       </div>
-      <div className="small">העבירו לכל מזמין את פרטי הכניסה שלו. אחרי הסגירה הקודים לא יוצגו שוב.</div>
+      <div className="small">
+        שלחו לכל מזמין את פרטי הכניסה שלו — במייל (נפתחת טיוטה מוכנה עם קישור אישי וקוד) או בהעתקה. אחרי הסגירה הקודים לא
+        יוצגו שוב.
+      </div>
       <table className="admin-table admin-sub-table">
         <tbody>
           {issued.codes.map((c) => (
@@ -385,13 +425,26 @@ function IssuedCodes({ issued, onClose }: { issued: Issued; onClose: () => void 
                 </span>
               </td>
               <td>
-                <button
-                  type="button"
-                  className={(many ? 'btn-secondary' : 'btn-primary') + ' btn-sm'}
-                  onClick={() => void copy(shareText(c), [c.member.id])}
-                >
-                  {copied.has(c.member.id) ? 'הועתק ✓' : 'העתקת פרטי כניסה'}
-                </button>
+                <div className="admin-row-actions">
+                  {c.member.email && (
+                    <a
+                      className={(many ? 'btn-secondary' : 'btn-primary') + ' btn-sm'}
+                      href={mailHref(mailApp, c.member.email, issuedMail(c))}
+                      {...(mailApp === 'gmail' && { target: '_blank', rel: 'noopener' })}
+                      title={c.member.email}
+                      onClick={() => setMailed((cur) => new Set([...cur, c.member.id]))}
+                    >
+                      {mailed.has(c.member.id) ? 'המייל נפתח ✓' : '✉ מייל עם פרטי הכניסה'}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className={(many || c.member.email ? 'btn-secondary' : 'btn-primary') + ' btn-sm'}
+                    onClick={() => void copy(issuedMail(c).body, [c.member.id])}
+                  >
+                    {copied.has(c.member.id) ? 'הועתק ✓' : 'העתקת פרטי כניסה'}
+                  </button>
+                </div>
               </td>
             </tr>
           ))}
@@ -411,13 +464,14 @@ function EditRow({
 }: {
   member: MemberDto;
   busy: boolean;
-  onSave: (patch: { name: string; phone: string }) => void;
+  onSave: (patch: { name: string; phone: string; email: string }) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState(member.name);
   const [phone, setPhone] = useState(member.phone);
+  const [email, setEmail] = useState(member.email);
   const valid = name.trim().length >= 2;
-  const save = () => valid && !busy && onSave({ name, phone });
+  const save = () => valid && !busy && onSave({ name, phone, email });
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') save();
     else if (e.key === 'Escape') onCancel();
@@ -429,6 +483,9 @@ function EditRow({
       </td>
       <td>
         <input type="tel" aria-label="טלפון" dir="ltr" maxLength={20} value={phone} onChange={(e) => setPhone(e.target.value)} onKeyDown={keys} />
+      </td>
+      <td>
+        <input type="email" aria-label="מייל" dir="ltr" maxLength={100} value={email} onChange={(e) => setEmail(e.target.value)} onKeyDown={keys} />
       </td>
       <td className="admin-col-updated small muted">שינוי שם מעדכן גם את ההזמנות שלו/ה</td>
       <td>

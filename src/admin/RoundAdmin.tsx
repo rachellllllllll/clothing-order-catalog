@@ -16,6 +16,7 @@ import { formatSavedAt, signed, toMoney } from '../lib/catalog/text';
 import type { Catalog } from '../lib/catalog/types';
 import { loadDriveCatalog } from '../lib/source/drive';
 import type { CatalogSource, Round } from '../lib/source/types';
+import { AnnounceMail } from './AnnounceMail';
 import { CatalogEditor } from './CatalogEditor';
 import { OrderersTable } from './OrderersTable';
 import { ProductsTable } from './ProductsTable';
@@ -61,6 +62,7 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
   const [filter, setFilter] = useState<StatusFilter>('all');
   const [search, setSearch] = useState('');
   const [receiving, setReceiving] = useState(false);
+  const [announcing, setAnnouncing] = useState(false);
   const canMark = round.locked || round.archived;
   const receivingOn = receiving && canMark && tab === 'products';
 
@@ -192,7 +194,8 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
       await apiPost('/api/admin', { action: 'publishRound', round: round.id });
       onRoundChange(round.id, { draft: undefined });
       setTab('orderers');
-      setStatus({ text: 'הסבב פורסם — המזמינים רואים אותו עכשיו.' });
+      setAnnouncing(true);
+      setStatus({ text: 'הסבב פורסם — המזמינים רואים אותו עכשיו. אפשר לשלוח להם הודעה במייל.' });
     });
 
   const deleteRound = () =>
@@ -233,15 +236,21 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
     summaries?.filter((o) => matchesStatus(o, filter) && (!query || o.name.toLowerCase().includes(query))) ?? null;
 
   const pickFilter = (f: StatusFilter) => {
+    setAnnouncing(false);
     setTab('orderers');
     setFilter((cur) => (cur === f && f !== 'all' ? 'all' : f));
+  };
+
+  const showProducts = () => {
+    setAnnouncing(false);
+    setTab('products');
   };
 
   const kpi = (f: StatusFilter, label: string, value: number, warn = false) => (
     <button
       type="button"
       className={'admin-kpi' + (warn && value ? ' warn' : '')}
-      aria-pressed={tab === 'orderers' && filter === f}
+      aria-pressed={!announcing && tab === 'orderers' && filter === f}
       onClick={() => pickFilter(f)}
     >
       <span className="t">{label}</span>
@@ -344,6 +353,18 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
               </button>
             ) : (
               <>
+                {!round.locked && (
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    aria-pressed={announcing}
+                    disabled={editorDirty && !announcing}
+                    title={editorDirty ? 'שמרו קודם את השינויים בקטלוג' : 'טיוטת מייל לכל מזמין, עם הקישור האישי שלו'}
+                    onClick={() => setAnnouncing((a) => !a)}
+                  >
+                    ✉ הודעה למזמינים
+                  </button>
+                )}
                 {round.locked ? (
                   <button type="button" className="btn-secondary btn-sm" disabled={busy} onClick={() => setRound({ locked: false }, 'לפתוח את הסבב לשינויים?')}>
                     🔓 פתיחה מחדש
@@ -376,18 +397,18 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
           {kpi('sent', 'שלחו', count('sent'))}
           {kpi('unsent', 'לא שלחו', count('unsent'), !round.locked && !round.archived)}
           {kpi('changed', 'שונו אחרי שליחה', count('changed'), true)}
-          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={() => setTab('products')}>
+          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={showProducts}>
             <span className="t">יחידות שנשלחו</span>
             <span className="v">{sum ? sum.units : '…'}</span>
             {sum && pendingNote && <span className="small admin-pending">לא כולל: {pendingNote}</span>}
           </button>
-          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={() => setTab('products')}>
+          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={showProducts}>
             <span className="t">{sum?.missingUnits ? 'לתשלום' : 'סכום'} (שנשלחו)</span>
             <span className="v">{sum ? toMoney(sum.amount) : '…'}</span>
             {sum && sum.unpricedUnits > 0 && <span className="small danger">+{sum.unpricedUnits} יח׳ ללא מחיר</span>}
           </button>
           {sum && sum.missingUnits > 0 && (
-            <button type="button" className="admin-kpi warn" aria-pressed={false} onClick={() => setTab('products')}>
+            <button type="button" className="admin-kpi warn" aria-pressed={false} onClick={showProducts}>
               <span className="t">לא הגיעו</span>
               <span className="v">{sum.missingUnits} יח׳</span>
               <span className="small muted">{toMoney(sum.missingAmount)} שלא יחויבו</span>
@@ -397,80 +418,84 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
         {status.text && <div className={'status' + (status.error ? ' error' : '')}>{status.text}</div>}
       </section>
 
-      <section className="panel admin-main">
-        <div className="admin-toolbar">
-          <div className="admin-seg" role="tablist">
-            <button type="button" role="tab" aria-selected={tab === 'orderers'} onClick={() => setTab('orderers')}>
-              לפי מזמינים
-            </button>
-            <button type="button" role="tab" aria-selected={tab === 'products'} onClick={() => setTab('products')}>
-              לפי מוצרים
-            </button>
-            {round.editable && (
-              <button type="button" role="tab" aria-selected={tab === 'catalog'} onClick={() => setTab('catalog')}>
-                עריכת קטלוג{editorDirty && ' ●'}
+      {announcing && !round.locked && !round.archived ? (
+        <AnnounceMail round={round} summaries={summaries} onClose={() => setAnnouncing(false)} onSignedOut={onSignedOut} />
+      ) : (
+        <section className="panel admin-main">
+          <div className="admin-toolbar">
+            <div className="admin-seg" role="tablist">
+              <button type="button" role="tab" aria-selected={tab === 'orderers'} onClick={() => setTab('orderers')}>
+                לפי מזמינים
               </button>
+              <button type="button" role="tab" aria-selected={tab === 'products'} onClick={() => setTab('products')}>
+                לפי מוצרים
+              </button>
+              {round.editable && (
+                <button type="button" role="tab" aria-selected={tab === 'catalog'} onClick={() => setTab('catalog')}>
+                  עריכת קטלוג{editorDirty && ' ●'}
+                </button>
+              )}
+            </div>
+            {tab !== 'catalog' && (
+              <>
+                <input
+                  type="search"
+                  className="admin-search"
+                  placeholder={tab === 'orderers' ? 'חיפוש מזמין…' : 'חיפוש דגם, צבע או מזמין…'}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <div className="admin-toolbar-end">
+                  <button type="button" className="btn-secondary btn-sm" disabled={loading} onClick={() => void refresh()} title="טעינה מחדש של ההזמנות והקטלוג">
+                    ↻ {loading ? 'טוען…' : 'רענון'}
+                  </button>
+                  {data && <span className="muted small">נטען {formatSavedAt(data.loadedAt)}</span>}
+                </div>
+              </>
             )}
           </div>
-          {tab !== 'catalog' && (
-            <>
-              <input
-                type="search"
-                className="admin-search"
-                placeholder={tab === 'orderers' ? 'חיפוש מזמין…' : 'חיפוש דגם, צבע או מזמין…'}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <div className="admin-toolbar-end">
-                <button type="button" className="btn-secondary btn-sm" disabled={loading} onClick={() => void refresh()} title="טעינה מחדש של ההזמנות והקטלוג">
-                  ↻ {loading ? 'טוען…' : 'רענון'}
-                </button>
-                {data && <span className="muted small">נטען {formatSavedAt(data.loadedAt)}</span>}
-              </div>
-            </>
-          )}
-        </div>
 
-        {editor}
-        {tab === 'catalog' ? null : tab === 'orderers' ? (
-          !visibleOrderers ? (
-            <div className="muted">טוען…</div>
-          ) : !summaries?.length ? (
-            <div className="muted">עדיין אין הזמנות בסבב הזה.</div>
+          {editor}
+          {tab === 'catalog' ? null : tab === 'orderers' ? (
+            !visibleOrderers ? (
+              <div className="muted">טוען…</div>
+            ) : !summaries?.length ? (
+              <div className="muted">עדיין אין הזמנות בסבב הזה.</div>
+            ) : (
+              <>
+                {filter !== 'all' && (
+                  <div className="admin-filter-note">
+                    <span className="chip">
+                      מוצגים: {filter === 'sent' ? 'שלחו' : filter === 'unsent' ? 'לא שלחו' : 'שונו אחרי שליחה'} ({visibleOrderers.length})
+                    </span>
+                    <button type="button" className="btn-link" onClick={() => setFilter('all')}>
+                      הצג את כולם
+                    </button>
+                  </div>
+                )}
+                <OrderersTable
+                  rows={visibleOrderers}
+                  totals={totals}
+                  detail={data && { orders: data.orders, shortages: data.shortages, catalog: data.catalog, images: data.source.images }}
+                />
+              </>
+            )
+          ) : !data || !products ? (
+            <div className="muted">טוען הזמנות וקטלוג…</div>
           ) : (
-            <>
-              {filter !== 'all' && (
-                <div className="admin-filter-note">
-                  <span className="chip">
-                    מוצגים: {filter === 'sent' ? 'שלחו' : filter === 'unsent' ? 'לא שלחו' : 'שונו אחרי שליחה'} ({visibleOrderers.length})
-                  </span>
-                  <button type="button" className="btn-link" onClick={() => setFilter('all')}>
-                    הצג את כולם
-                  </button>
-                </div>
-              )}
-              <OrderersTable
-                rows={visibleOrderers}
-                totals={totals}
-                detail={data && { orders: data.orders, shortages: data.shortages, catalog: data.catalog, images: data.source.images }}
-              />
-            </>
-          )
-        ) : !data || !products ? (
-          <div className="muted">טוען הזמנות וקטלוג…</div>
-        ) : (
-          <ProductsTable
-            view={products}
-            images={data.source.images}
-            query={query}
-            canMark={canMark}
-            receiving={receivingOn}
-            onReceivingChange={setReceiving}
-            busy={busy}
-            onMark={(changes) => void markShortages(changes)}
-          />
-        )}
-      </section>
+            <ProductsTable
+              view={products}
+              images={data.source.images}
+              query={query}
+              canMark={canMark}
+              receiving={receivingOn}
+              onReceivingChange={setReceiving}
+              busy={busy}
+              onMark={(changes) => void markShortages(changes)}
+            />
+          )}
+        </section>
+      )}
     </>
   );
 }

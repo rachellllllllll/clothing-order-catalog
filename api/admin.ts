@@ -1,7 +1,7 @@
 import { adminLogin, clearAdminCookie, isAdmin, noStoreJson, readJsonBody, requireAdmin } from './_auth.js';
 import { createAppRound, publishAppRound, readAppCatalog, saveAppCatalog, uploadImage } from './_catalog.js';
 import { errorResponse, HttpError } from './_drive.js';
-import { addMembers, deleteMember, listMembers, newCode, pastOrderers, updateMember } from './_members.js';
+import { addMembers, deleteMember, listMembers, loginLinks, newCode, pastOrderers, updateMember } from './_members.js';
 import { adminOrder, allOrders, deleteRound, listOrders, listRoundDtos, setRoundState, setShortages } from './_orders.js';
 import { findAppRound } from './_rounds.js';
 
@@ -59,9 +59,13 @@ export async function POST(request: Request): Promise<Response> {
       case 'addMembers':
         return noStoreJson(await addMembers(body.members));
       case 'updateMember':
-        return noStoreJson(await updateMember(body.id, { name: body.name, phone: body.phone, active: body.active }));
+        return noStoreJson(
+          await updateMember(body.id, { name: body.name, phone: body.phone, email: body.email, active: body.active }),
+        );
       case 'newCode':
         return noStoreJson(await newCode(body.id));
+      case 'loginLinks':
+        return noStoreJson(await loginLinks(body.ids));
       case 'deleteMember':
         return noStoreJson(await deleteMember(body.id));
       case 'pastOrderers':

@@ -17,7 +17,7 @@ function apiDevServer(): Plugin {
       if (process.env.VITEST) return;
       const env = loadEnv('development', process.cwd(), '');
       const fake = (process.env.FAKE_DRIVE ?? env.FAKE_DRIVE) === '1';
-      if (!fake && !env.GOOGLE_API_KEY) return;
+      if (!fake && !env.GOOGLE_REFRESH_TOKEN && !env.GOOGLE_API_KEY) return;
       for (const [k, v] of Object.entries(env)) process.env[k] ??= v;
 
       if (fake) {

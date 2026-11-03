@@ -3,11 +3,11 @@
  * the admin issued. Stored in Drive:
  *   ORDERS_FOLDER_ID/
  *     מזמינים/          appProperties { kind: 'members' }
- *       <name>.json     appProperties { kind: 'member', nk, active, phone, last } — summary for cheap listing
+ *       <name>.json     appProperties { kind: 'member', nk, active, phone, email, last } — summary for cheap listing
  * The member id is the file id; order files point to it with appProperties.mid.
  */
 import { createHash } from 'node:crypto';
-import { checkPin, generatePin, hashPin, type StoredPin } from './_auth.js';
+import { checkPin, generatePin, hashPin, signToken, verifyToken, type StoredPin } from './_auth.js';
 import { HttpError } from './_drive.js';
 import {
   createFolder,
@@ -27,11 +27,15 @@ import type { IssuedCode, MemberDto } from './_types.js';
 const MAX_FAILS = 5;
 const LOCK_MS = 15 * 60 * 1000;
 const MAX_ADD = 100;
+/** How long a personal sign-in link (sent by mail) works. A new code ends it sooner. */
+export const LINK_DAYS = 30;
+const MAX_LINKS = 300;
 
 export interface StoredMember {
   v: 1;
   name: string;
   phone: string;
+  email: string;
   pin: StoredPin | null;
   active: boolean;
   fails: number;
@@ -60,6 +64,16 @@ function parsePhone(raw: unknown): string {
   return phone;
 }
 
+/** Plain ASCII addresses only: they go into a mailto link and must fit in a Drive property. */
+function parseEmail(raw: unknown): string {
+  if (raw == null) return '';
+  const email = typeof raw === 'string' ? raw.trim() : null;
+  if (email === null || email.length > 100 || (email && !/^[\w.+'-]+@[A-Za-z\d-]+(\.[A-Za-z\d-]+)+$/.test(email))) {
+    throw new HttpError(400, 'כתובת המייל לא תקינה.', 'bad_email');
+  }
+  return email;
+}
+
 function parseId(raw: unknown): string {
   if (typeof raw !== 'string' || !/^[\w-]{1,200}$/.test(raw)) throw new HttpError(400, 'Invalid member id.');
   return raw;
@@ -73,6 +87,7 @@ function parseStored(raw: unknown): StoredMember {
     v: 1,
     name: typeof m.name === 'string' ? m.name : '',
     phone: typeof m.phone === 'string' ? m.phone : '',
+    email: typeof m.email === 'string' ? m.email : '',
     pin: m.pin && typeof m.pin.salt === 'string' && typeof m.pin.hash === 'string' ? m.pin : null,
     active: m.active !== false,
     fails: Number(m.fails) || 0,
@@ -83,7 +98,14 @@ function parseStored(raw: unknown): StoredMember {
 }
 
 function memberProps(m: StoredMember): Record<string, string> {
-  return { kind: 'member', nk: nameKey(m.name), active: m.active ? '1' : '0', phone: m.phone, last: m.lastLoginAt ?? '' };
+  return {
+    kind: 'member',
+    nk: nameKey(m.name),
+    active: m.active ? '1' : '0',
+    phone: m.phone,
+    email: m.email,
+    last: m.lastLoginAt ?? '',
+  };
 }
 
 function toDto(f: AppFile): MemberDto {
@@ -92,6 +114,7 @@ function toDto(f: AppFile): MemberDto {
     id: f.id,
     name: f.name.replace(/\.json$/i, ''),
     phone: p.phone || '',
+    email: p.email || '',
     active: p.active !== '0',
     createdAt: f.createdTime,
     lastLoginAt: p.last || null,
@@ -193,6 +216,42 @@ export function sessionStamp(m: StoredMember): string {
   return m.pin ? m.pin.salt.slice(0, 8) : '';
 }
 
+// ── Personal sign-in links ──
+
+interface LinkToken {
+  k: 'link';
+  /** Member id. */
+  m: string;
+  /** Code salt prefix: a new code ends the link too. */
+  p: string;
+  exp: number;
+}
+
+/** The key of the member's personal sign-in link (`/#login=<key>`), sent to them by mail. */
+function linkKey(id: string, m: StoredMember): string {
+  return signToken({ k: 'link', m: id, p: sessionStamp(m), exp: Date.now() + LINK_DAYS * 24 * 60 * 60 * 1000 });
+}
+
+/** Signs in with a personal link. It stops working when it expires or the member gets a new code. */
+export async function memberLinkLogin(key: unknown): Promise<{ id: string; member: StoredMember }> {
+  const expired = () =>
+    new HttpError(401, 'הקישור האישי כבר לא בתוקף. היכנסו עם השם והקוד, או בקשו קישור חדש ממנהל ההזמנות.', 'link_expired');
+  const token = typeof key === 'string' && key.length <= 500 ? verifyToken<LinkToken>(key) : null;
+  if (!token || token.k !== 'link' || typeof token.m !== 'string' || !/^[\w-]{1,200}$/.test(token.m)) throw expired();
+  let m: StoredMember;
+  try {
+    m = await readMember(token.m);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) throw expired();
+    throw err;
+  }
+  if (!m.pin || sessionStamp(m) !== token.p) throw expired();
+  if (!m.active) throw new HttpError(403, 'הגישה שלך להזמנות הושבתה. לפרטים פנו למנהל ההזמנות.', 'disabled');
+  m.lastLoginAt = new Date().toISOString();
+  await writeMember(token.m, m);
+  return { id: token.m, member: m };
+}
+
 /** The member of a session token, or null when it was removed, disabled or got a new code since. */
 export async function sessionMember(id: string, stamp: string): Promise<StoredMember | null> {
   let m: StoredMember;
@@ -225,14 +284,16 @@ export async function addMembers(
     (await findMembersFolder()) ?? (await createFolder('מזמינים', ordersRootId(), { kind: 'members' }));
   const taken = new Set((await memberFiles(folder.id)).map((f) => f.appProperties.nk));
   const skipped: { name: string; reason: 'duplicate' | 'invalid' }[] = [];
-  const toAdd: { name: string; phone: string }[] = [];
+  const toAdd: { name: string; phone: string; email: string }[] = [];
   for (const entry of raw as Record<string, unknown>[]) {
     const rawName = typeof entry?.name === 'string' ? entry.name : '';
     let name: string;
     let phone: string;
+    let email: string;
     try {
       name = parseName(rawName);
       phone = parsePhone(entry.phone);
+      email = parseEmail(entry.email);
     } catch {
       skipped.push({ name: rawName.slice(0, 60), reason: 'invalid' });
       continue;
@@ -243,19 +304,20 @@ export async function addMembers(
       continue;
     }
     taken.add(nk);
-    toAdd.push({ name, phone });
+    toAdd.push({ name, phone, email });
   }
 
   const added: IssuedCode[] = [];
   // A few at a time keeps well within Drive's rate limits.
   for (let i = 0; i < toAdd.length; i += 6) {
     const batch = await Promise.all(
-      toAdd.slice(i, i + 6).map(async ({ name, phone }) => {
+      toAdd.slice(i, i + 6).map(async ({ name, phone, email }) => {
         const code = generatePin();
         const m: StoredMember = {
           v: 1,
           name,
           phone,
+          email,
           pin: hashPin(code),
           active: true,
           fails: 0,
@@ -264,7 +326,7 @@ export async function addMembers(
           lastLoginAt: null,
         };
         const file = await createJsonFile(folder.id, name + '.json', memberProps(m), m);
-        return { member: toDto(file), code };
+        return { member: toDto(file), code, link: linkKey(file.id, m) };
       }),
     );
     added.push(...batch);
@@ -272,16 +334,17 @@ export async function addMembers(
   return { added, skipped };
 }
 
-/** Renames (also in the member's orders), changes the phone, or disables/enables sign-in. */
+/** Renames (also in the member's orders), changes the phone or email, or disables/enables sign-in. */
 export async function updateMember(
   rawId: unknown,
-  patch: { name?: unknown; phone?: unknown; active?: unknown },
+  patch: { name?: unknown; phone?: unknown; email?: unknown; active?: unknown },
 ): Promise<{ member: MemberDto }> {
   const file = await memberFile(rawId);
   const m = await readMember(file.id);
   const oldName = m.name;
   if (patch.name !== undefined) m.name = parseName(patch.name);
   if (patch.phone !== undefined) m.phone = parsePhone(patch.phone);
+  if (patch.email !== undefined) m.email = parseEmail(patch.email);
   if (typeof patch.active === 'boolean') m.active = patch.active;
 
   const renamed = m.name !== oldName;
@@ -306,7 +369,26 @@ export async function newCode(rawId: unknown): Promise<IssuedCode> {
   m.pin = hashPin(code);
   m.fails = 0;
   m.lockUntil = null;
-  return { member: toDto(await writeMember(file.id, m)), code };
+  return { member: toDto(await writeMember(file.id, m)), code, link: linkKey(file.id, m) };
+}
+
+/** Personal sign-in link keys of the given members (for mailing them), by member id. Unknown ids are left out. */
+export async function loginLinks(raw: unknown): Promise<{ links: Record<string, string> }> {
+  if (!Array.isArray(raw) || raw.length > MAX_LINKS) throw new HttpError(400, 'Invalid member ids.');
+  const ids = raw.map(parseId);
+  const folder = await findMembersFolder();
+  const known = new Set(folder ? (await memberFiles(folder.id)).map((f) => f.id) : []);
+  const wanted = [...new Set(ids)].filter((id) => known.has(id));
+  const links: Record<string, string> = {};
+  for (let i = 0; i < wanted.length; i += 10) {
+    await Promise.all(
+      wanted.slice(i, i + 10).map(async (id) => {
+        const m = await readMember(id);
+        if (m.active && m.pin) links[id] = linkKey(id, m);
+      }),
+    );
+  }
+  return { links };
 }
 
 /** Removes someone added by mistake. People who already ordered can only be disabled (their orders stay). */

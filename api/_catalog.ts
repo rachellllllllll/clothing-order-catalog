@@ -1,11 +1,11 @@
 /**
- * Rounds created on the admin page — the catalog is a JSON file edited there, instead of an Excel file:
+ * Order rounds — all created on the admin page ("סבב חדש"); the catalog is a JSON file edited there:
  *   ORDERS_FOLDER_ID/
- *     קטלוג/            appProperties { kind: 'catalogRoot' } — shared "anyone with the link: viewer" (for the images)
+ *     קטלוג/            appProperties { kind: 'catalogRoot' }
  *       <round name>/   appProperties { kind: 'round', draft: '1' | '0' }
  *         catalog.json  appProperties { kind: 'catalog', rev }  — a CatalogDoc
  *         <image>       appProperties { kind: 'image' }
- * Everything under קטלוג/ is readable by anyone with a link, so only catalog data goes there — never orders or members.
+ * Nothing here is shared in Drive: the app reads and writes it through the API, and images are served by /api/image.
  */
 import { HttpError } from './_drive.js';
 import {
@@ -20,7 +20,6 @@ import {
   q,
   readJson,
   renameFile,
-  shareWithAnyone,
   trashFile,
   updateJsonFile,
   updateProperties,
@@ -141,10 +140,7 @@ async function findCatalogRoot(): Promise<AppFile | null> {
 }
 
 async function ensureCatalogRoot(): Promise<AppFile> {
-  const root = (await findCatalogRoot()) ?? (await createFolder(ROOT_NAME, ordersRootId(), { kind: 'catalogRoot' }));
-  // Repeated on every new round: it does nothing when shared already, and restores the link if it was removed in Drive.
-  await shareWithAnyone(root.id);
-  return root;
+  return (await findCatalogRoot()) ?? (await createFolder(ROOT_NAME, ordersRootId(), { kind: 'catalogRoot' }));
 }
 
 export async function listAppRounds(): Promise<AppFile[]> {

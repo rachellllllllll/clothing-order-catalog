@@ -1,12 +1,10 @@
 /**
- * Shared Google Drive helpers for the Vercel functions.
+ * Shared helpers for the Vercel functions (HttpError, errors) and the LEGACY Excel catalog folder.
  * Files starting with "_" are not exposed as routes by Vercel.
  *
- * Required environment variables (Vercel → Project → Settings → Environment Variables):
- *   GOOGLE_API_KEY   – API key with the Google Drive API enabled
- *   DRIVE_FOLDER_ID  – the shared catalog folder id (the part after /folders/ in the Drive link)
- * The folder must be shared as "Anyone with the link – Viewer".
- * Every subfolder of it is an order round, holding that round's Excel file and images.
+ * The Excel catalog folder is no longer used: every round is created on the admin page (see _catalog.ts).
+ * Leave GOOGLE_API_KEY and DRIVE_FOLDER_ID unset; the code below only runs when both are set
+ * (a publicly shared folder whose subfolders each hold a round's Excel file and images).
  */
 
 const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';

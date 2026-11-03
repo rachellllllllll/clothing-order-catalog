@@ -351,6 +351,48 @@
   user-select: all;
 }
 
+/* ── Mail to orderers (drafts opened in the admin's mail app) ── */
+.mail-app-picker { display: inline-flex; align-items: center; gap: 4px; }
+.mail-app-picker select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.admin-announce h3 { display: flex; gap: 6px; }
+.announce-help { margin: 0; }
+.announce-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.announce-edit { display: grid; gap: 8px; align-content: start; }
+.announce-edit .field { min-width: 0; }
+.announce-edit input,
+.announce-edit textarea {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+.announce-edit textarea { resize: vertical; min-height: 160px; }
+.announce-vars code { padding: 0 4px; border-radius: 4px; background: var(--chip); font-size: 12px; }
+.announce-preview {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f8fafc;
+}
+.announce-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; }
+.admin-announce-table td { vertical-align: middle; }
+.admin-announce-table tr.selected > td { background: var(--chip); }
+.admin-announce-table .btn-link { padding: 0; font-weight: 600; color: var(--text); }
+/* The composer scrolls as a whole (like the catalog editor). */
+@media (min-width: 900px) and (min-height: 600px) {
+  .admin-main.admin-announce { overflow: auto; }
+  .admin-main.admin-announce > * { flex-shrink: 0; }
+  .admin-main.admin-announce .admin-table-wrap { overflow: visible; }
+}
+
 /* ── Rounds created here: new round, sizes, catalog editor ── */
 a.btn-secondary,
 a.btn-primary { display: inline-block; border-width: 1px; border-style: solid; border-radius: 8px; font-weight: 600; text-decoration: none; }

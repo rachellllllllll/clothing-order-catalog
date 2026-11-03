@@ -250,11 +250,46 @@ function applyLogin(res: OrderResponse, token: string) {
 
 /** Signs in with the name and code from the orderers list, then opens the order in the open round (if any). */
 export async function signIn(name: string, pin: string): Promise<void> {
-  const res = await apiPost<SigninResponse>('/api/order', { action: 'signin', name, pin });
+  applySignin(await apiPost<SigninResponse>('/api/order', { action: 'signin', name, pin }));
+}
+
+function applySignin(res: SigninResponse) {
   const member = { name: res.name, token: res.token };
   writeMember(member);
   set({ member, authNotice: null, signer: res.name });
   void openOrder();
+}
+
+/** The key of a personal sign-in link (`#login=<key>`), removed from the address so it isn't kept or shared. */
+function takeLinkKey(): string | null {
+  const key = /^#login=([\w.-]{1,500})$/.exec(window.location.hash)?.[1] ?? null;
+  if (window.location.hash.startsWith('#login=')) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
+  return key;
+}
+
+/** Signs in with the personal link from the admin's mail — instead of whoever is signed in on this device. */
+async function linkSignIn(key: string): Promise<void> {
+  const before = get().member;
+  if (!before) set({ authPending: true });
+  try {
+    const res = await apiPost<SigninResponse>('/api/order', { action: 'linkSignin', key });
+    if (before && before.name !== res.name) {
+      await saveNow();
+      dropMember(null);
+    }
+    applySignin(res);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (get().member) get().setStatus(message, true);
+    else set({ authPending: false, authNotice: message });
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const key = takeLinkKey();
+  if (key) void linkSignIn(key);
 }
 
 /** Opens the signed-in member's order in the open round (created on the first visit while the round is open). */

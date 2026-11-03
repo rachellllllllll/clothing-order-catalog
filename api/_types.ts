@@ -104,13 +104,14 @@ export interface OrderDto {
 /** POST /api/order */
 export type OrderRequest =
   | { action: 'signin'; name: string; pin: string }
+  | { action: 'linkSignin'; key: string }
   | { action: 'open'; round: string }
   | { action: 'login'; round: string; name: string; pin: string }
   | { action: 'load' }
   | { action: 'save'; lines: OrderLine[]; baseRev: number }
   | { action: 'submit'; lines: OrderLine[]; baseRev: number };
 
-/** `signin`: the token opens the member's order in any round (`open`). */
+/** `signin` / `linkSignin`: the token opens the member's order in any round (`open`). */
 export interface SigninResponse {
   name: string;
   token: string;
@@ -143,20 +144,23 @@ export interface MemberDto {
   id: string;
   name: string;
   phone: string;
+  email: string;
   active: boolean;
   createdAt: string;
   lastLoginAt: string | null;
 }
 
-/** A newly issued sign-in code (shown to the admin once). */
+/** A newly issued sign-in code (shown to the admin once), with the member's personal sign-in link key. */
 export interface IssuedCode {
   member: MemberDto;
   code: string;
+  link: string;
 }
 
 export interface NewMember {
   name: string;
   phone?: string;
+  email?: string;
 }
 
 /** POST /api/admin */
@@ -178,7 +182,8 @@ export type AdminRequest =
   | { action: 'deleteRound'; round: string }
   | { action: 'members' }
   | { action: 'addMembers'; members: NewMember[] }
-  | { action: 'updateMember'; id: string; name?: string; phone?: string; active?: boolean }
+  | { action: 'updateMember'; id: string; name?: string; phone?: string; email?: string; active?: boolean }
   | { action: 'newCode'; id: string }
+  | { action: 'loginLinks'; ids: string[] }
   | { action: 'deleteMember'; id: string }
   | { action: 'pastOrderers' };

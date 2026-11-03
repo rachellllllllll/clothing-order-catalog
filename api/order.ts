@@ -1,11 +1,12 @@
 import { noStoreJson, parsePin, readJsonBody } from './_auth.js';
 import { errorResponse, HttpError } from './_drive.js';
 import { parseName } from './_members.js';
-import { authorize, loadResponse, login, openOrder, parseLines, saveOrder, signin } from './_orders.js';
+import { authorize, linkSignin, loadResponse, login, openOrder, parseLines, saveOrder, signin } from './_orders.js';
 
 /**
  * POST /api/order (JSON body; see OrderRequest in _types.ts)
  *   signin { name, pin }                → { name, token }   (name + code from the orderers list; token for `open`)
+ *   linkSignin { key }                  → same as signin   (key of the personal link the admin mailed)
  *   open   (Bearer signin token) { round } → { order, round, token, created?, shortages? }   (token for the actions below)
  *   login  { round, name, pin } → same as open   (signin + open in one step)
  *   load   (Bearer token)                → { order, round, shortages? }   (shortages: locked/archived rounds)
@@ -18,6 +19,8 @@ export async function POST(request: Request): Promise<Response> {
     switch (body.action) {
       case 'signin':
         return noStoreJson(await signin(parseName(body.name), parsePin(body.pin)));
+      case 'linkSignin':
+        return noStoreJson(await linkSignin(body.key));
       case 'open':
         return noStoreJson(await openOrder(request, body.round));
       case 'login':

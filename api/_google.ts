@@ -2,6 +2,8 @@
  * Google Drive access with the owner's OAuth refresh token — used to store the orders.
  * Scope `drive.file`: the app can only see files and folders it created itself
  * (the orders folder created by scripts/get-refresh-token.mjs and everything inside it).
+ * Nothing in Drive needs to be shared: every read and write (catalog, images, orders, members) goes
+ * through the API with this token, and images reach the browser via /api/image.
  *
  * Environment variables:
  *   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET – OAuth client (type "Desktop app")
@@ -90,8 +92,17 @@ async function gfetch(url: URL | string, init: RequestInit = {}): Promise<Respon
   const res = await fetch(url, { ...init, headers });
   if (res.status === 404) throw new HttpError(404, 'Not found.', 'not_found');
   if (!res.ok) {
-    console.error('Drive API error', res.status, await res.text());
-    throw new HttpError(502, 'Google Drive request failed (' + res.status + ').');
+    const text = await res.text();
+    console.error('Drive API error', res.status, text);
+    // Google's short reason code (e.g. storageQuotaExceeded) tells the admin what to fix.
+    let reason = '';
+    try {
+      const err = (JSON.parse(text) as { error?: { errors?: { reason?: string }[]; status?: string } }).error;
+      reason = err?.errors?.[0]?.reason ?? err?.status ?? '';
+    } catch {
+      // not JSON
+    }
+    throw new HttpError(502, 'Google Drive request failed (' + res.status + (reason ? ', ' + reason : '') + ').');
   }
   return res;
 }
@@ -163,17 +174,6 @@ export async function renameFile(fileId: string, name: string): Promise<AppFile>
     body: JSON.stringify({ name }),
   });
   return normalize(await res.json());
-}
-
-/** "Anyone with the link – Viewer" (inherited by everything inside a folder). Repeating it changes nothing. */
-export async function shareWithAnyone(fileId: string): Promise<void> {
-  const url = new URL(FILES_API + '/' + encodeURIComponent(fileId) + '/permissions');
-  url.searchParams.set('fields', 'id');
-  await gfetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role: 'reader', type: 'anyone' }),
-  });
 }
 
 /** Uploads a binary file (e.g. an image) with its metadata in one request. */

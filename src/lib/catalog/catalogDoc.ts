@@ -4,12 +4,15 @@ import type { Catalog, CatalogItem, ModelGroup } from './types';
 
 export type { CatalogDoc, DocColor, DocProduct } from '../../../api/_types';
 
+/** Kids sizes: every year up to 10, then even only (2–10, 12, 14, … 22). */
+const KIDS_NUMBERS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 22];
+
 /** Quick size sets for a new round or the sizes panel (a round may mix several). */
 export const SIZE_PRESETS: { label: string; sizes: string[] }[] = [
   { label: 'מבוגרים', sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL'] },
-  { label: 'תינוקות', sizes: ['3M', '6M', '9M', '12M', '18M', '24M', '30M', '36M'] },
-  { label: 'ילדים (שנים)', sizes: Array.from({ length: 17 }, (_, i) => `${i + 2}Y`) },
-  { label: 'מספרים', sizes: Array.from({ length: 15 }, (_, i) => String(i + 2)) },
+  { label: 'תינוקות', sizes: ['3M', '6M', '9M', '12M', '18M', '24M'] },
+  { label: 'ילדים (שנים)', sizes: KIDS_NUMBERS.map((n) => `${n}Y`) },
+  { label: 'מספרים', sizes: KIDS_NUMBERS.map(String) },
 ];
 
 /** Size labels as stored: trimmed and upper case ("3m" = "3M"). */
