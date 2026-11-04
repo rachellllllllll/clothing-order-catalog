@@ -1,5 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { computeAvailableSizes, isSizeHeader, parseSizeRange, sizeToMonths } from './sizes';
+import { computeAvailableSizes, isSizeHeader, parseSizeRange, sizeRunText, sizeToMonths } from './sizes';
+
+describe('sizeRunText', () => {
+  const all = ['XS', 'S', 'M', 'L', 'XL'];
+
+  it('shortens runs of 3+ sizes and lists the rest in round order', () => {
+    expect(sizeRunText(all, all)).toBe('XS–XL');
+    expect(sizeRunText(all, ['XL', 'XS', 'S', 'M'])).toBe('XS–M, XL');
+    expect(sizeRunText(all, ['S', 'M'])).toBe('S, M');
+    expect(sizeRunText(all, ['M', 'unknown'])).toBe('M');
+    expect(sizeRunText(all, [])).toBe('');
+  });
+});
 
 describe('sizes', () => {
   it('recognizes size headers', () => {

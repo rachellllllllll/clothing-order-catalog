@@ -156,7 +156,7 @@ describe('unsentUnits', () => {
     const rows = [s('draft', 3, null), s('up', 4, 1), s('down', 2, 1), s('same', 9, 2)];
     const res = unsentUnits(rows, (o) => sent[o.fileId]);
     expect(res).toEqual({ added: 5, removed: 3 });
-    expect(unsentNote(res)).toBe('לא כולל 5 יח׳ שלא נשלחו · 3 שהוסרו עדיין נספרות');
+    expect(unsentNote(res)).toBe('+5 ממתינות לשליחה · 3 שהוסרו עדיין נספרות');
     expect(unsentNote({ added: 0, removed: 0 })).toBe('');
   });
 });

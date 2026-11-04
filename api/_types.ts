@@ -183,13 +183,6 @@ export type AdminRequest =
   | { action: 'uploadImage'; round: string; data: string }
   | { action: 'publishRound'; round: string }
   | { action: 'deleteRound'; round: string }
-  | {
-      action: 'importOrders';
-      round: string;
-      orders: { name: string; lines: { model: string; color: string; size: string; qty: number }[] }[];
-      /** Only `false` writes. */
-      dryRun?: boolean;
-    }
   | { action: 'members' }
   | { action: 'addMembers'; members: NewMember[] }
   | { action: 'updateMember'; id: string; name?: string; phone?: string; email?: string; active?: boolean }

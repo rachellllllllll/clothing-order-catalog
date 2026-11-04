@@ -1,6 +1,7 @@
 import type { ShortageLine } from '../../../api/_types';
 import { missingQty, shortageIndex } from './shortages';
-import type { Catalog, CartLine, CatalogItem, ModelGroup, QtyMap, SizeFilterMode, SortMode } from './types';
+import { sizeRunText } from './sizes';
+import type { Catalog, CartLine, CatalogItem, ModelGroup, QtyMap, SizeColumn, SizeFilterMode, SortMode } from './types';
 
 export function qtyOf(qty: QtyMap, itemId: string, size: string): number {
   return qty[itemId]?.[size] ?? 0;
@@ -20,6 +21,13 @@ export function groupUnits(qty: QtyMap, group: ModelGroup): number {
 
 export function isSizeAvailable(item: CatalogItem, size: string): boolean {
   return !item.availableSizes || item.availableSizes.has(size);
+}
+
+/** The sizes a variant comes in, e.g. "XS–XL" or "2Y–6Y, 10Y" (an unparsed Excel range text is shown as is). */
+export function itemSizesText(item: CatalogItem, sizeCols: readonly SizeColumn[]): string {
+  if (!item.availableSizes && item.sizeRange) return item.sizeRange;
+  const all = sizeCols.map((c) => c.label);
+  return sizeRunText(all, all.filter((l) => isSizeAvailable(item, l)));
 }
 
 /** Saved tab choice, else the first variant that has quantities, else the first variant. */
@@ -81,12 +89,21 @@ export function filterGroups(groups: ModelGroup[], qty: QtyMap, f: GroupFilter):
   return out;
 }
 
-/** Sizes that at least one product is actually available in; empty when the file has no SIZE range column. */
+/**
+ * Sizes that at least one product is actually available in; empty when the file has no SIZE range column, or when
+ * every product comes in every size (the filter would not hide anything).
+ */
 export function offeredFilterSizes(catalog: Catalog): string[] {
   if (catalog.columns.sizeRangeCol <= 0) return [];
+  const all = catalog.columns.sizeCols.map((s) => s.label);
   const offered = new Set<string>();
-  for (const it of catalog.items) it.availableSizes?.forEach((s) => offered.add(s));
-  return catalog.columns.sizeCols.map((s) => s.label).filter((l) => offered.has(l));
+  let narrows = false;
+  for (const it of catalog.items) {
+    if (!it.availableSizes) continue;
+    it.availableSizes.forEach((s) => offered.add(s));
+    if (!narrows) narrows = all.some((l) => !it.availableSizes!.has(l));
+  }
+  return narrows ? all.filter((l) => offered.has(l)) : [];
 }
 
 export function cartLines(catalog: Catalog, qty: QtyMap): CartLine[] {

@@ -1,4 +1,5 @@
 import type { CatalogDoc, DocProduct } from '../../../api/_types';
+import { sizeRunText } from './sizes';
 import { normalizeText } from './text';
 import type { Catalog, CatalogItem, ModelGroup } from './types';
 
@@ -62,10 +63,7 @@ export function docItemId(product: DocProduct, colorId: string): string {
 /** "3M–12M" for a run of the round's sizes, otherwise the list; empty when the product comes in every size. */
 function sizeRangeText(all: string[], sizes: string[]): string {
   if (!sizes.length || sizes.length === all.length) return '';
-  const idx = sizes.map((s) => all.indexOf(s)).sort((a, b) => a - b);
-  const contiguous = idx.every((v, i) => i === 0 || v === idx[i - 1] + 1);
-  if (contiguous && idx.length > 2) return all[idx[0]] + '–' + all[idx[idx.length - 1]];
-  return idx.map((i) => all[i]).join(', ');
+  return sizeRunText(all, sizes);
 }
 
 /** The catalog of a round edited on the admin page, in the shape the order page uses (like a parsed Excel file). */

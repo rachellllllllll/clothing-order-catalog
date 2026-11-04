@@ -22,17 +22,7 @@ import {
   updateProperties,
   type AppFile,
 } from './_google.js';
-import { modelKey, readAppCatalog } from './_catalog.js';
-import {
-  listMembers,
-  memberLinkLogin,
-  memberLogin,
-  nameKey,
-  parseName,
-  sessionMember,
-  sessionStamp,
-  type StoredMember,
-} from './_members.js';
+import { memberLinkLogin, memberLogin, nameKey, sessionMember, sessionStamp, type StoredMember } from './_members.js';
 import { findAppRound, findRound, listAllRounds, type RoundRef } from './_rounds.js';
 import type {
   OrderDto,
@@ -551,108 +541,6 @@ export async function setRoundState(
   const folder = await ensureRoundFolder(round);
   const updated = await updateProperties(folder.id, props);
   return { round: stateOf(updated) };
-}
-
-// ── One-time import of a round ordered outside the site (temporary) ──
-
-interface ImportLine {
-  model: string;
-  color: string;
-  size: string;
-  qty: number;
-}
-
-function parseImport(raw: unknown): { name: string; lines: ImportLine[] }[] {
-  if (!Array.isArray(raw) || !raw.length || raw.length > 200) throw new HttpError(400, 'Invalid orders.');
-  return (raw as Record<string, unknown>[]).map((o) => {
-    if (!Array.isArray(o?.lines) || o.lines.length > MAX_LINES) throw new HttpError(400, 'Invalid order lines.');
-    const lines = (o.lines as Record<string, unknown>[]).map((l): ImportLine => {
-      const model = str(l?.model, 200);
-      const color = str(l?.color ?? '', 200);
-      const size = str(l?.size, 60);
-      const qty = l?.qty;
-      if (!model || color === null || !size || typeof qty !== 'number' || !Number.isInteger(qty) || qty < 1 || qty > 9999) {
-        throw new HttpError(400, 'Invalid order line.');
-      }
-      return { model, color, size, qty };
-    });
-    return { name: parseName(o.name), lines };
-  });
-}
-
-/**
- * Adds the orders of a round created on the admin page as sent orders. Lines come as model/color/size and are
- * matched to the round's catalog (ignoring case, spaces and punctuation); an empty color matches a one-color product.
- * Each order is linked to the member with the same name, if any. Names that already have an order in the round are
- * skipped, so it can be run again. Nothing is written with `dryRun`, or while any line doesn't match the catalog.
- */
-export async function importOrders(roundId: unknown, rawOrders: unknown, dryRun: boolean) {
-  const round = await findAppRound(roundId);
-  const input = parseImport(rawOrders);
-  const [{ catalog }, { members }, found] = await Promise.all([
-    readAppCatalog(round.folder),
-    listMembers(),
-    findRoundFolder(round.id),
-  ]);
-  const existing = found ? await orderFiles(found.id) : [];
-
-  const sizeKey = (s: string) => s.trim().toUpperCase();
-  const sizes = new Map(catalog.sizes.map((s) => [sizeKey(s), s]));
-  type Variant = { id: string; model: string; color: string; sizes: string[] };
-  const variants = new Map<string, Variant>();
-  const byModel = new Map<string, Variant[]>();
-  for (const p of catalog.products) {
-    const list = p.colors.map((c) => ({ id: p.id + '.' + c.id, model: p.model, color: c.name, sizes: p.sizes }));
-    p.colors.forEach((c, i) => variants.set(modelKey(p.model) + '|' + modelKey(c.name), list[i]));
-    byModel.set(modelKey(p.model), list);
-  }
-  const memberIds = new Map(members.map((m) => [nameKey(m.name), m.id]));
-
-  const unmatched: (ImportLine & { name: string })[] = [];
-  const outsideSizes: (ImportLine & { name: string })[] = [];
-  const orders = input.map(({ name, lines }) => {
-    const merged = new Map<string, OrderLine>();
-    for (const l of lines) {
-      const only = byModel.get(modelKey(l.model));
-      const v =
-        variants.get(modelKey(l.model) + '|' + modelKey(l.color)) ?? (!l.color.trim() && only?.length === 1 ? only[0] : undefined);
-      const size = sizes.get(sizeKey(l.size));
-      if (!v || !size) {
-        unmatched.push({ name, ...l });
-        continue;
-      }
-      if (!v.sizes.includes(size)) outsideSizes.push({ name, ...l });
-      const key = v.id + '|' + size;
-      const prev = merged.get(key);
-      if (prev) prev.qty += l.qty;
-      else merged.set(key, { id: v.id, size, qty: l.qty, model: v.model, color: v.color });
-    }
-    const nk = nameKey(name);
-    const mid = memberIds.get(nk);
-    const exists = existing.some((f) => f.appProperties.nk === nk || (mid && f.appProperties.mid === mid));
-    return { name, mid, exists, lines: [...merged.values()] };
-  });
-
-  const toWrite = unmatched.length || dryRun ? [] : orders.filter((o) => !o.exists && o.lines.length);
-  if (toWrite.length) {
-    const folder = found ?? (await ensureRoundFolder(round));
-    const now = new Date().toISOString();
-    for (let i = 0; i < toWrite.length; i += 6) {
-      await Promise.all(
-        toWrite.slice(i, i + 6).map(({ name, mid, lines }) => {
-          const o: StoredOrder = { v: 1, name, rev: 1, createdAt: now, updatedAt: now, lines, submitted: { at: now, rev: 1, lines } };
-          return createJsonFile(folder.id, name + '.json', { ...summaryProps(o), ...(mid && { mid }) }, o);
-        }),
-      );
-    }
-  }
-  return {
-    orders: orders.map((o) => ({ name: o.name, units: units(o.lines), member: !!o.mid, exists: o.exists })),
-    units: orders.reduce((s, o) => s + units(o.lines), 0),
-    unmatched,
-    outsideSizes,
-    written: toWrite.length,
-  };
 }
 
 /**

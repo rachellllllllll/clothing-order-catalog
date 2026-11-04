@@ -1,10 +1,12 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { ShortageChange } from '../../api/_types';
 import { ProductImage } from '../components/ProductImage';
 import type { ProductRow, ProductsView, WhoOrdered } from '../lib/catalog/adminView';
 import { notArrived, signed, toMoney } from '../lib/catalog/text';
 import type { ImageRef } from '../lib/source/types';
 import { ImageView } from './ImageView';
+import { ExpandAll } from './OrderersTable';
 
 interface Props {
   view: ProductsView;
@@ -23,6 +25,38 @@ interface Props {
 const lineLabel = (model: string, color: string) => [model, color].filter(Boolean).join(' · ');
 
 const PENDING_TITLE = 'טיוטות ושינויים שעדיין לא נשלחו — לא נכללים בכמויות ובסכום';
+
+type SortKey = 'catalog' | 'units' | 'amount';
+
+/** The item column's width: dragged by its edge, kept per browser. */
+const ITEM_W_KEY = 'orderUi:prodItemWidth';
+const ITEM_W = { min: 160, max: 520, initial: 240, step: 16 };
+const clampItemW = (w: number) => Math.round(Math.min(ITEM_W.max, Math.max(ITEM_W.min, w)));
+
+function readItemW(): number {
+  try {
+    const w = Number(localStorage.getItem(ITEM_W_KEY));
+    return w ? clampItemW(w) : ITEM_W.initial;
+  } catch {
+    return ITEM_W.initial;
+  }
+}
+
+function writeItemW(w: number) {
+  try {
+    localStorage.setItem(ITEM_W_KEY, String(w));
+  } catch {
+    // ignore
+  }
+}
+
+/** Highlights the hovered size column (1-based): lightly in the body, clearly in the header and totals rows. */
+const colHoverCss = (n: number) =>
+  `.admin-prod-table > tbody > tr > td:nth-child(${n}) { background-color: #f5f9fc; }
+` +
+  `.admin-table-wrap > .admin-prod-table > :is(thead, tfoot) > tr > :nth-child(${n}) { background: var(--chip); color: var(--accent); }`;
+
+const paidAmount = (r: ProductRow) => (r.item.price == null ? null : r.item.price * (r.units - r.missingUnits));
 
 /** Marks (or clears) every orderer of the row's sizes — all sizes, or only `size`. */
 function rowChanges(r: ProductRow, missing: boolean, size?: string): ShortageChange[] {
@@ -56,13 +90,104 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
   const [open, setOpen] = useState<Map<string, string | null>>(new Map());
   const [enlarged, setEnlarged] = useState<{ src: string; caption: string } | null>(null);
   const [pick, setPick] = useState<{ id: string; size: string; dir: Step } | null>(null);
+  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'catalog', desc: false });
+  const [itemW, setItemW] = useState(readItemW);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const sumHead = useRef<HTMLTableCellElement>(null);
+  const hoverStyle = useRef<HTMLStyleElement>(null);
+  const hoverCol = useRef(0);
   const editing = canMark && receiving;
 
-  // Items ordered only in drafts or unsent changes are listed too (outside receiving, which is about sent goods).
-  const ordered = (r: ProductRow) => r.units > 0 || (!editing && r.pending > 0);
-  const rows = view.rows.filter((r) => (showAll || ordered(r)) && matches(r, query));
+  // Items ordered only in drafts or unsent changes are listed too while the round is open; once it is locked
+  // (canMark) the sent versions are final and unsent units are left out.
+  const ordered = (r: ProductRow) => r.units > 0 || (!canMark && r.pending > 0);
+  const listed = view.rows.filter((r) => (showAll || ordered(r)) && matches(r, query));
   const unordered = view.rows.filter((r) => !ordered(r) && matches(r, query)).length;
   const sizes = view.sizes;
+
+  // Catalog order by default; by units or amount, ties keep the catalog order and items without a price go last.
+  const catalogIndex = new Map(view.rows.map((r, i) => [r.item.id, i]));
+  const byCatalog = (a: ProductRow, b: ProductRow) => catalogIndex.get(a.item.id)! - catalogIndex.get(b.item.id)!;
+  const sortValue = (r: ProductRow): number | null =>
+    sort.key === 'units' ? r.units : sort.key === 'amount' ? paidAmount(r) : catalogIndex.get(r.item.id)!;
+  const rows = [...listed].sort((a, b) => {
+    const va = sortValue(a);
+    const vb = sortValue(b);
+    if (va === null || vb === null) return Number(va === null) - Number(vb === null) || byCatalog(a, b);
+    return (sort.desc ? vb - va : va - vb) || byCatalog(a, b);
+  });
+  // The colors of a model are grouped only in catalog order, where they sit together.
+  const grouped = sort.key === 'catalog';
+  const hasRows = rows.length > 0;
+
+  const sortBy = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: key !== 'catalog' }));
+  const ariaSort = (key: SortKey) => (sort.key === key ? (sort.desc ? 'descending' : 'ascending') : undefined);
+  const sortButton = (key: SortKey, label: string) => (
+    <button type="button" className="admin-sort" onClick={() => sortBy(key)}>
+      {label}
+      <span className="admin-sort-arrow">{sort.key === key ? (sort.desc ? '▼' : '▲') : ''}</span>
+    </button>
+  );
+
+  // The units column sticks right next to the amount column, so it needs the amount column's width.
+  useLayoutEffect(() => {
+    const th = sumHead.current;
+    if (!th) return;
+    const ro = new ResizeObserver(() =>
+      tableRef.current?.style.setProperty('--sum-w', `${th.getBoundingClientRect().width}px`),
+    );
+    ro.observe(th);
+    return () => ro.disconnect();
+  }, [hasRows]);
+
+  const commitItemW = (w: number) => {
+    setItemW(w);
+    writeItemW(w);
+  };
+
+  /** Dragging the item column's edge; the width is applied directly while dragging and saved on release. */
+  function startResize(e: ReactPointerEvent<HTMLSpanElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    const rtl = getComputedStyle(handle).direction === 'rtl';
+    const x0 = e.clientX;
+    let w = itemW;
+    const move = (ev: PointerEvent) => {
+      w = clampItemW(itemW + (rtl ? x0 - ev.clientX : ev.clientX - x0));
+      tableRef.current?.style.setProperty('--item-w', `${w}px`);
+    };
+    const end = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      commitItemW(w);
+    };
+    handle.setPointerCapture(e.pointerId);
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  }
+
+  function resizeKey(e: ReactKeyboardEvent<HTMLSpanElement>) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const rtl = getComputedStyle(e.currentTarget).direction === 'rtl';
+    const wider = (e.key === 'ArrowLeft') === rtl;
+    commitItemW(clampItemW(itemW + (wider ? ITEM_W.step : -ITEM_W.step)));
+  }
+
+  /** Column hover is drawn by a style rule, so moving the mouse doesn't re-render the table. */
+  function setHoverCol(col: number) {
+    if (col === hoverCol.current || !hoverStyle.current) return;
+    hoverCol.current = col;
+    hoverStyle.current.textContent = col ? colHoverCss(col) : '';
+  }
+  const hoverAt = (e: ReactMouseEvent) => {
+    const cell = (e.target as Element).closest('td, th');
+    setHoverCol(cell instanceof HTMLTableCellElement && cell.classList.contains('admin-size') ? cell.cellIndex + 1 : 0);
+  };
 
   const sizeTotals: Record<string, number> = {};
   const sum = { units: 0, amount: 0, orderedAmount: 0, unpricedUnits: 0, missingUnits: 0, pending: 0 };
@@ -114,11 +239,6 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
   return (
     <div className={'admin-products' + (editing ? ' receiving' : '')}>
       <div className="admin-actions small">
-        {openable.length > 0 && (
-          <button type="button" className="btn-link" onClick={toggleAll}>
-            {allOpen ? '▴ סגירת כל הפירוטים' : '▾ פתיחת כל הפירוטים'}
-          </button>
-        )}
         {unordered > 0 && (
           <button type="button" className="btn-link" aria-pressed={showAll} onClick={() => setShowAll((v) => !v)}>
             {showAll ? `הסתרת ${unordered} פריטים שלא הוזמנו` : `הצג גם ${unordered} פריטים שלא הוזמנו`}
@@ -148,22 +268,50 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
         </div>
       )}
 
-      {!rows.length ? (
+      <style ref={hoverStyle} />
+      {!hasRows ? (
         <div className="muted">{query ? 'אין פריטים שמתאימים לחיפוש.' : 'עדיין לא הוזמנו פריטים.'}</div>
       ) : (
         <div className="admin-table-wrap">
-          <table className="admin-table admin-prod-table">
+          <table
+            ref={tableRef}
+            className="admin-table admin-prod-table"
+            style={{ '--item-w': `${itemW}px` } as CSSProperties}
+            onMouseOver={hoverAt}
+            onMouseLeave={() => setHoverCol(0)}
+          >
             <thead>
               <tr>
-                <th className="admin-prod-item">פריט</th>
+                <th className="admin-prod-item" aria-sort={ariaSort('catalog')}>
+                  {openable.length > 0 && <ExpandAll allOpen={allOpen} onClick={toggleAll} />}
+                  {sortButton('catalog', 'פריט')}
+                  <span
+                    className="admin-col-resize"
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="רוחב עמודת הפריט"
+                    aria-valuenow={itemW}
+                    aria-valuemin={ITEM_W.min}
+                    aria-valuemax={ITEM_W.max}
+                    tabIndex={0}
+                    title="גרירה לשינוי הרוחב · לחיצה כפולה לרוחב הרגיל"
+                    onPointerDown={startResize}
+                    onKeyDown={resizeKey}
+                    onDoubleClick={() => commitItemW(ITEM_W.initial)}
+                  />
+                </th>
                 <th className="num">מחיר</th>
                 {sizes.map((s) => (
                   <th key={s} className="num admin-size">
                     {s}
                   </th>
                 ))}
-                <th className="num">סה״כ נשלח</th>
-                <th className="num">{sum.missingUnits ? 'לתשלום' : 'סכום'}</th>
+                <th className="num admin-prod-units" aria-sort={ariaSort('units')} title="רק הזמנות שנשלחו">
+                  {sortButton('units', 'סה״כ')}
+                </th>
+                <th ref={sumHead} className="num admin-prod-sum" aria-sort={ariaSort('amount')}>
+                  {sortButton('amount', sum.missingUnits ? 'לתשלום' : 'סכום')}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -172,7 +320,8 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
                 const focus = open.get(r.item.id) ?? null;
                 const label = lineLabel(r.item.model, r.item.color);
                 // Colors of one model in a row: the model's name and picture only on the first, a faint line between them.
-                const isColorOf = (m: ProductRow | undefined) => !!m && m.item.modelKey === r.item.modelKey && !!m.item.color;
+                const isColorOf = (m: ProductRow | undefined) =>
+                  grouped && !!m && m.item.modelKey === r.item.modelKey && !!m.item.color;
                 const sameAsPrev = !!r.item.color && isColorOf(rows[i - 1]);
                 const sameAsNext = isColorOf(rows[i + 1]);
                 const image = images.get(r.item.modelKey);
@@ -330,16 +479,16 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
                           )}
                         </td>
                       ))}
-                      <td className="num strong">
+                      <td className="num strong admin-prod-units">
                         {r.units || ''}
                         {r.missingUnits > 0 && <div className="danger small">{notArrived(r.missingUnits)}</div>}
-                        {!editing && r.pending !== 0 && (
+                        {!canMark && r.pending !== 0 && (
                           <div className="admin-pending small" title={PENDING_TITLE}>
                             לא נשלח: {signed(r.pending)}
                           </div>
                         )}
                       </td>
-                      <td className="num">
+                      <td className="num admin-prod-sum">
                         {r.units ? (
                           r.item.price == null ? (
                             <span className="danger">ללא מחיר</span>
@@ -383,8 +532,8 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
                             </td>
                           );
                         })}
-                        <td />
-                        <td />
+                        <td className="admin-prod-units" />
+                        <td className="admin-prod-sum" />
                       </tr>
                     )}
                   </Fragment>
@@ -400,16 +549,16 @@ export function ProductsTable({ view, images, query, canMark, receiving, onRecei
                     {sizeTotals[s] || ''}
                   </td>
                 ))}
-                <td className="num">
+                <td className="num admin-prod-units">
                   {sum.units}
                   {sum.missingUnits > 0 && <div className="danger small">{notArrived(sum.missingUnits)}</div>}
-                  {!editing && sum.pending !== 0 && (
+                  {!canMark && sum.pending !== 0 && (
                     <div className="admin-pending small" title={PENDING_TITLE}>
                       לא נשלח: {signed(sum.pending)}
                     </div>
                   )}
                 </td>
-                <td className="num">
+                <td className="num admin-prod-sum">
                   {toMoney(sum.amount)}
                   {sum.missingUnits > 0 && <div className="muted small">הוזמן {toMoney(sum.orderedAmount)}</div>}
                   {sum.unpricedUnits > 0 && <div className="danger small">+{sum.unpricedUnits} ללא מחיר</div>}

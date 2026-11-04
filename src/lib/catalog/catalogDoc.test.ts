@@ -41,6 +41,19 @@ describe('catalogFromDoc', () => {
     expect(offeredFilterSizes(catalog)).toEqual(doc.sizes);
   });
 
+  it('offers no size filter when every product comes in every size', () => {
+    const sizes = ['XS', 'S', 'M'];
+    const full = catalogFromDoc({
+      v: 1,
+      sizes,
+      products: [
+        { id: 'p1', model: 'Tee', price: 1, notes: '', sizes, colors: [{ id: 'c1', name: '' }], image: null },
+        { id: 'p2', model: 'Top', price: 1, notes: '', sizes, colors: [{ id: 'c2', name: '' }], image: null },
+      ],
+    });
+    expect(offeredFilterSizes(full)).toEqual([]);
+  });
+
   it('normalizes size labels', () => {
     expect(sizeLabel('  3m ')).toBe('3M');
     expect(sizeLabel('one   size')).toBe('ONE SIZE');

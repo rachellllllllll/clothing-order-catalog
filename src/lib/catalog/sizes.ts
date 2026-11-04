@@ -51,3 +51,17 @@ export function computeAvailableSizes(rangeText: string, sizeCols: SizeColumn[])
   }
   return set;
 }
+
+/** `sizes` in the order of `all`, with runs of 3+ consecutive sizes shortened: "XS–XL", "2Y–6Y, 10Y". */
+export function sizeRunText(all: readonly string[], sizes: readonly string[]): string {
+  const idx = [...new Set(sizes.map((s) => all.indexOf(s)).filter((i) => i >= 0))].sort((a, b) => a - b);
+  const parts: string[] = [];
+  for (let i = 0; i < idx.length; ) {
+    let j = i;
+    while (j + 1 < idx.length && idx[j + 1] === idx[j] + 1) j++;
+    if (j - i >= 2) parts.push(all[idx[i]] + '–' + all[idx[j]]);
+    else for (let k = i; k <= j; k++) parts.push(all[idx[k]]);
+    i = j + 1;
+  }
+  return parts.join(', ');
+}

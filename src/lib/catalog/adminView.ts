@@ -44,7 +44,7 @@ export function unsentUnits(
 }
 
 export const unsentNote = ({ added, removed }: { added: number; removed: number }) =>
-  [added > 0 && `לא כולל ${added} יח׳ שלא נשלחו`, removed > 0 && `${removed} שהוסרו עדיין נספרות`]
+  [added > 0 && `+${added} ממתינות לשליחה`, removed > 0 && `${removed} שהוסרו עדיין נספרות`]
     .filter(Boolean)
     .join(' · ');
 

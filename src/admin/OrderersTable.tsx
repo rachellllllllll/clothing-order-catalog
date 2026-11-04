@@ -21,6 +21,8 @@ interface Props {
   /** Per-order totals of the sent version; null until the full orders have loaded. */
   totals: Map<string, Totals> | null;
   detail: DetailSource | null;
+  /** The round is locked or archived: the sent versions are final, so unsent units are not summed up. */
+  final: boolean;
 }
 
 type Enlarged = { src: string; caption: string };
@@ -34,7 +36,17 @@ const isEmpty = (o: OrderSummary) => !o.submittedAt && !o.units;
 /** Changed after sending, then drafts, then sent. */
 const statusRank = (o: OrderSummary) => (isChangedAfterSend(o) ? 0 : !o.submittedAt ? 1 : 2);
 
-export function OrderersTable({ rows, totals, detail }: Props) {
+/** The caret in a table's first header cell: opens or closes every row's detail at once. */
+export function ExpandAll({ allOpen, onClick }: { allOpen: boolean; onClick: () => void }) {
+  const label = allOpen ? 'סגירת כל הפירוטים' : 'פתיחת כל הפירוטים';
+  return (
+    <button type="button" className="admin-expand-all" aria-expanded={allOpen} aria-label={label} title={label} onClick={onClick}>
+      {allOpen ? '▾' : '▸'}
+    </button>
+  );
+}
+
+export function OrderersTable({ rows, totals, detail, final }: Props) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'name', desc: false });
   const [enlarged, setEnlarged] = useState<Enlarged | null>(null);
@@ -68,16 +80,19 @@ export function OrderersTable({ rows, totals, detail }: Props) {
     return (sort.desc ? -compare(a, b) : compare(a, b)) || a.name.localeCompare(b.name, 'he');
   });
 
+  const sortButton = (key: SortKey, label: string) => (
+    <button
+      type="button"
+      className="admin-sort"
+      onClick={() => setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: FIRST_DESC[key] }))}
+    >
+      {label}
+      <span className="admin-sort-arrow">{sort.key === key ? (sort.desc ? '▼' : '▲') : ''}</span>
+    </button>
+  );
   const sortHeader = (key: SortKey, label: string, className?: string) => (
     <th className={className} aria-sort={sort.key === key ? (sort.desc ? 'descending' : 'ascending') : undefined}>
-      <button
-        type="button"
-        className="admin-sort"
-        onClick={() => setSort((s) => (s.key === key ? { key, desc: !s.desc } : { key, desc: FIRST_DESC[key] }))}
-      >
-        {label}
-        <span className="admin-sort-arrow">{sort.key === key ? (sort.desc ? '▼' : '▲') : ''}</span>
-      </button>
+      {sortButton(key, label)}
     </th>
   );
 
@@ -106,22 +121,20 @@ export function OrderersTable({ rows, totals, detail }: Props) {
     sum.amount += of(o)?.amount ?? 0;
     sum.missingUnits += of(o)?.missingUnits ?? 0;
   }
-  const pending = unsentNote(unsentUnits(rows, (o) => of(o)?.units));
+  const pending = final ? '' : unsentNote(unsentUnits(rows, (o) => of(o)?.units));
 
   if (!rows.length) return <div className="muted">אין מזמינים שמתאימים לסינון.</div>;
 
   return (
     <div className="admin-products">
-      <div className="admin-actions small">
-        <button type="button" className="btn-link" onClick={toggleAll}>
-          {allOpen ? '▴ סגירת כל הפירוטים' : '▾ פתיחת כל הפירוטים'}
-        </button>
-      </div>
     <div className="admin-table-wrap">
       <table className="admin-table admin-orderers-table">
         <thead>
           <tr>
-            {sortHeader('name', 'שם')}
+            <th aria-sort={sort.key === 'name' ? (sort.desc ? 'descending' : 'ascending') : undefined}>
+              <ExpandAll allOpen={allOpen} onClick={toggleAll} />
+              {sortButton('name', 'שם')}
+            </th>
             {sortHeader('sent', 'נשלח')}
             {sortHeader('units', 'יחידות', 'num')}
             {sortHeader('amount', sum.missingUnits ? 'לתשלום' : 'סכום', 'num')}

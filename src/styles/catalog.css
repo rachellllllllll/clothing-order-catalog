@@ -12,7 +12,11 @@
   border-radius: 11px;
   overflow: hidden;
   background: #fff;
+  cursor: pointer;
+  transition: box-shadow 0.12s, border-color 0.12s;
 }
+
+.card:hover { border-color: #99e9f2; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08); }
 
 .card.card-ordered {
   border-color: #74c69d;

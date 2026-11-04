@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { activeVariantIndex, isSizeAvailable, qtyOf, variantUnits } from '../lib/catalog/selectors';
+import { activeVariantIndex, isSizeAvailable, itemSizesText, qtyOf, variantUnits } from '../lib/catalog/selectors';
 import { missingQty, shortageIndex } from '../lib/catalog/shortages';
 import { toMoney } from '../lib/catalog/text';
 import type { CatalogItem, ModelGroup, QtyMap, SizeColumn } from '../lib/catalog/types';
@@ -10,10 +10,12 @@ const NO_SIZES: SizeColumn[] = [];
 interface Props {
   group: ModelGroup;
   qty: QtyMap;
+  /** Catalog card: no size counters (quantities are picked in the product view). */
+  summary?: boolean;
 }
 
 /** Color tabs (when the model has several colors) + the size counters of the active color. */
-export function VariantPicker({ group, qty }: Props) {
+export function VariantPicker({ group, qty, summary }: Props) {
   const saved = useOrderStore((s) => s.activeColorByModel[group.key]);
   const setActiveColor = useOrderStore((s) => s.setActiveColor);
   const active = activeVariantIndex(group, qty, saved);
@@ -39,18 +41,35 @@ export function VariantPicker({ group, qty }: Props) {
           })}
         </div>
       )}
-      <VariantPanel item={group.variants[active]} qty={qty} showColor={!multiColor} />
+      <VariantPanel item={group.variants[active]} qty={qty} showColor={!multiColor} summary={summary} />
     </>
   );
 }
 
-function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap; showColor: boolean }) {
+function VariantPanel({
+  item,
+  qty,
+  showColor,
+  summary,
+}: {
+  item: CatalogItem;
+  qty: QtyMap;
+  showColor: boolean;
+  summary?: boolean;
+}) {
   const sizeCols = useOrderStore((s) => s.catalog?.columns.sizeCols ?? NO_SIZES);
   const changeQty = useOrderStore((s) => s.changeQty);
   const setQty = useOrderStore((s) => s.setQty);
   const readOnly = useOrderStore(isReadOnly);
   const shortages = useOrderStore((s) => s.shortages);
   const shortIdx = useMemo(() => shortageIndex(shortages), [shortages]);
+  const sizesText = itemSizesText(item, sizeCols);
+  const missingUnits = summary
+    ? sizeCols.reduce((n, { label }) => {
+        const q = qtyOf(qty, item.id, label);
+        return q > 0 ? n + missingQty(shortIdx, item.id, label, q) : n;
+      }, 0)
+    : 0;
 
   return (
     <div className="variant">
@@ -59,50 +78,57 @@ function VariantPanel({ item, qty, showColor }: { item: CatalogItem; qty: QtyMap
           {showColor && <span className="chip">{item.color || 'ללא צבע'}</span>}
           {item.price == null && <span className="chip chip-warn">ללא מחיר</span>}
           {item.notes && <span className="chip">{item.notes}</span>}
-          {item.sizeRange && <span className="chip chip-size">מידות: {item.sizeRange}</span>}
+          {sizesText && <span className="chip chip-size">מידות: {sizesText}</span>}
+          {missingUnits > 0 && (
+            <span className="chip chip-short" title="לא הגיע מהספק — לא יחויב">
+              {missingUnits === 1 ? 'אחד לא הגיע' : `${missingUnits} לא הגיעו`}
+            </span>
+          )}
         </div>
         <strong>{toMoney(item.price)}</strong>
       </div>
-      <div className="sizes">
-        {sizeCols.map(({ label }) => {
-          const q = qtyOf(qty, item.id, label);
-          const available = isSizeAvailable(item, label);
-          if (!available && q <= 0) return null;
-          const missing = q > 0 ? missingQty(shortIdx, item.id, label, q) : 0;
-          return (
-            <div
-              key={label}
-              className={'size-box' + (q > 0 ? ' size-has-qty' : '') + (!available ? ' size-unavailable' : '')}
-            >
-              <div className="label">{label}</div>
-              <div className="counter">
-                <button
-                  type="button"
-                  aria-label={`הפחת ${label}`}
-                  disabled={readOnly}
-                  onClick={() => changeQty(item.id, label, -1)}
-                >
-                  -
-                </button>
-                <QtyInput label={label} value={q} readOnly={readOnly} onChange={(n) => setQty(item.id, label, n)} />
-                <button
-                  type="button"
-                  aria-label={`הוסף ${label}`}
-                  disabled={readOnly}
-                  onClick={() => changeQty(item.id, label, 1)}
-                >
-                  +
-                </button>
-              </div>
-              {missing > 0 && (
-                <div className="size-short" title="לא הגיע מהספק — לא יחויב">
-                  {missing === q ? 'לא הגיע' : missing === 1 ? 'אחד לא הגיע' : `${missing} לא הגיעו`}
+      {!summary && (
+        <div className="sizes">
+          {sizeCols.map(({ label }) => {
+            const q = qtyOf(qty, item.id, label);
+            const available = isSizeAvailable(item, label);
+            if (!available && q <= 0) return null;
+            const missing = q > 0 ? missingQty(shortIdx, item.id, label, q) : 0;
+            return (
+              <div
+                key={label}
+                className={'size-box' + (q > 0 ? ' size-has-qty' : '') + (!available ? ' size-unavailable' : '')}
+              >
+                <div className="label">{label}</div>
+                <div className="counter">
+                  <button
+                    type="button"
+                    aria-label={`הפחת ${label}`}
+                    disabled={readOnly}
+                    onClick={() => changeQty(item.id, label, -1)}
+                  >
+                    -
+                  </button>
+                  <QtyInput label={label} value={q} readOnly={readOnly} onChange={(n) => setQty(item.id, label, n)} />
+                  <button
+                    type="button"
+                    aria-label={`הוסף ${label}`}
+                    disabled={readOnly}
+                    onClick={() => changeQty(item.id, label, 1)}
+                  >
+                    +
+                  </button>
                 </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                {missing > 0 && (
+                  <div className="size-short" title="לא הגיע מהספק — לא יחויב">
+                    {missing === q ? 'לא הגיע' : missing === 1 ? 'אחד לא הגיע' : `${missing} לא הגיעו`}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
