@@ -36,3 +36,16 @@ export function formatSavedAt(iso: string, now = new Date()): string {
   const date = d.getDate() + '.' + (d.getMonth() + 1);
   return 'ב־' + (d.getFullYear() === now.getFullYear() ? date : date + '.' + d.getFullYear());
 }
+
+/** The local calendar day as `YYYY-MM-DD`. */
+export function todayKey(now = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/** A calendar day `YYYY-MM-DD` as "יום חמישי 12.11" (with the year if it is not the current one). */
+export function formatDay(day: string, now = new Date()): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const weekday = new Date(y, m - 1, d).toLocaleDateString('he-IL', { weekday: 'long' });
+  return `${weekday} ${d}.${m}` + (y === now.getFullYear() ? '' : '.' + y);
+}

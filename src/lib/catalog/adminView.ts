@@ -20,6 +20,34 @@ export function matchesStatus(o: OrderSummary, filter: StatusFilter): boolean {
   }
 }
 
+/**
+ * How far the orders as they are now differ from the sent versions the totals count: units in drafts or added
+ * after sending (left out), and units removed after sending (still counted). Per order, so a swap inside one order
+ * shows in neither.
+ */
+export function unsentUnits(
+  rows: readonly OrderSummary[],
+  sentUnits: (o: OrderSummary) => number | undefined,
+): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const o of rows) {
+    if (!o.submittedAt) added += o.units;
+    else if (isChangedAfterSend(o)) {
+      const sent = sentUnits(o);
+      if (sent === undefined) continue;
+      added += Math.max(0, o.units - sent);
+      removed += Math.max(0, sent - o.units);
+    }
+  }
+  return { added, removed };
+}
+
+export const unsentNote = ({ added, removed }: { added: number; removed: number }) =>
+  [added > 0 && `לא כולל ${added} יח׳ שלא נשלחו`, removed > 0 && `${removed} שהוסרו עדיין נספרות`]
+    .filter(Boolean)
+    .join(' · ');
+
 /** The lines of the last sent version — what is ordered from the supplier and charged (none if never sent). */
 export function sentLines(order: OrderDto): OrderLine[] {
   return order.submitted?.lines ?? [];

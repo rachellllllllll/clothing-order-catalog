@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OrderDto, OrderLine, OrderSummary } from '../../../api/_types';
 import { buildXlsx } from '../../test/buildXlsx';
 import { readFirstSheet } from '../xlsx/xlsx';
-import { linesTotals, matchesStatus, orderDetail, productsView } from './adminView';
+import { linesTotals, matchesStatus, orderDetail, productsView, unsentNote, unsentUnits } from './adminView';
 import { parseCatalog } from './parseCatalog';
 
 const HEADER = ['MODEL', 'PRICE', 'COLOR', 'SIZE', 'NOTES', 'S', 'M', 'L'];
@@ -137,5 +137,26 @@ describe('matchesStatus', () => {
     expect([sent, changed, unsent].map((o) => matchesStatus(o, 'unsent'))).toEqual([false, false, true]);
     expect([sent, changed, unsent].map((o) => matchesStatus(o, 'changed'))).toEqual([false, true, false]);
     expect([sent, changed, unsent].map((o) => matchesStatus(o, 'all'))).toEqual([true, true, true]);
+  });
+});
+
+describe('unsentUnits', () => {
+  const s = (fileId: string, units: number, submittedRev: number | null, rev = 2): OrderSummary => ({
+    fileId,
+    name: fileId,
+    rev,
+    units,
+    updatedAt: '',
+    submittedAt: submittedRev === null ? null : '2026-01-01',
+    submittedRev,
+  });
+  const sent: Record<string, number> = { up: 2, down: 5, same: 4 };
+
+  it('counts drafts and additions as left out, removals as still counted', () => {
+    const rows = [s('draft', 3, null), s('up', 4, 1), s('down', 2, 1), s('same', 9, 2)];
+    const res = unsentUnits(rows, (o) => sent[o.fileId]);
+    expect(res).toEqual({ added: 5, removed: 3 });
+    expect(unsentNote(res)).toBe('לא כולל 5 יח׳ שלא נשלחו · 3 שהוסרו עדיין נספרות');
+    expect(unsentNote({ added: 0, removed: 0 })).toBe('');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { catalogFromDoc, sizeLabel, type CatalogDoc } from './catalogDoc';
+import { catalogFromDoc, sizeLabel, sortSizes, type CatalogDoc } from './catalogDoc';
 import { offeredFilterSizes } from './selectors';
 
 const doc: CatalogDoc = {
@@ -44,5 +44,25 @@ describe('catalogFromDoc', () => {
   it('normalizes size labels', () => {
     expect(sizeLabel('  3m ')).toBe('3M');
     expect(sizeLabel('one   size')).toBe('ONE SIZE');
+  });
+});
+
+describe('sortSizes', () => {
+  it('orders babies, kids, numbers and letter sizes; unknown sizes last as added', () => {
+    expect(sortSizes(['XL', 'ONE SIZE', 'S', '12M', '38', '2Y', '3M', '36', '10Y', 'XXS', 'Free', '3-6M', '3XL'])).toEqual([
+      '3M',
+      '3-6M',
+      '12M',
+      '2Y',
+      '10Y',
+      '36',
+      '38',
+      'XXS',
+      'S',
+      'XL',
+      '3XL',
+      'ONE SIZE',
+      'Free',
+    ]);
   });
 });

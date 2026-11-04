@@ -20,6 +20,35 @@ export function sizeLabel(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ').toUpperCase();
 }
 
+/** Longest size label the server accepts. */
+export const MAX_SIZE_LENGTH = 20;
+
+const LETTER_ORDER = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '4XL', '5XL'];
+const LETTER_ALIAS: Record<string, string> = { '2XL': 'XXL', '3XL': 'XXXL', XXXXL: '4XL' };
+
+/** [group, value]: babies (months), kids (years), plain numbers, letter sizes — or null for anything else. */
+function sizeRank(size: string): [number, number] | null {
+  const s = sizeLabel(size);
+  let m = /^(?:\d+-)?(\d+(?:\.\d+)?)M$/.exec(s);
+  if (m) return [0, Number(m[1])];
+  m = /^(?:\d+-)?(\d+(?:\.\d+)?)Y$/.exec(s);
+  if (m) return [1, Number(m[1])];
+  if (/^\d+(?:\.\d+)?$/.test(s)) return [2, Number(s)];
+  const i = LETTER_ORDER.indexOf(LETTER_ALIAS[s] ?? s);
+  return i >= 0 ? [3, i] : null;
+}
+
+/** The usual order: 3M…24M, 2Y…16Y, 2…46, XS…XXL; other sizes (ONE SIZE…) last, in the order they were added. */
+export function sortSizes(sizes: string[]): string[] {
+  return sizes
+    .map((s, i) => ({ s, i, r: sizeRank(s) }))
+    .sort((a, b) => (a.r && b.r ? a.r[0] - b.r[0] || a.r[1] - b.r[1] : a.r ? -1 : b.r ? 1 : 0) || a.i - b.i)
+    .map((x) => x.s);
+}
+
+/** Same as roundNameKey on the server: two rounds can't share a name. */
+export const roundNameKey = (name: string) => name.replace(/\s+/g, ' ').trim().toLowerCase();
+
 /** Short random id for products and colors (orders refer to items by `<product id>.<color id>`). */
 export function newId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6));
