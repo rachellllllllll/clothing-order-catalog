@@ -1,13 +1,24 @@
 import { noStoreJson, parsePin, readJsonBody } from './_auth.js';
 import { errorResponse, HttpError } from './_drive.js';
 import { parseName } from './_members.js';
-import { authorize, linkSignin, loadResponse, login, openOrder, parseLines, saveOrder, signin } from './_orders.js';
+import {
+  authorize,
+  linkSignin,
+  loadResponse,
+  login,
+  openOrder,
+  orderedClosedRounds,
+  parseLines,
+  saveOrder,
+  signin,
+} from './_orders.js';
 
 /**
  * POST /api/order (JSON body; see OrderRequest in _types.ts)
  *   signin { name, pin }                → { name, token }   (name + code from the orderers list; token for `open`)
  *   linkSignin { key }                  → same as signin   (key of the personal link the admin mailed)
  *   open   (Bearer signin token) { round } → { order, round, token, created?, shortages? }   (token for the actions below)
+ *   myRounds (Bearer signin token)      → { ordered: string[] }   (locked/archived rounds where the member ordered)
  *   login  { round, name, pin } → same as open   (signin + open in one step)
  *   load   (Bearer token)                → { order, round, shortages? }   (shortages: locked/archived rounds)
  *   save   (Bearer token) { lines, baseRev } → { order, round }   409 on conflict, 423 when locked
@@ -23,6 +34,8 @@ export async function POST(request: Request): Promise<Response> {
         return noStoreJson(await linkSignin(body.key));
       case 'open':
         return noStoreJson(await openOrder(request, body.round));
+      case 'myRounds':
+        return noStoreJson({ ordered: await orderedClosedRounds(request) });
       case 'login':
         return noStoreJson(await login(body.round, parseName(body.name), parsePin(body.pin)));
       case 'load':

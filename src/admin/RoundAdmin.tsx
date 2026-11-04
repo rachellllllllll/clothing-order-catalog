@@ -4,19 +4,20 @@ import { ApiError, apiPost } from '../lib/api/client';
 import {
   addTotals,
   emptyTotals,
-  isChangedAfterSend,
   linesTotals,
   matchesStatus,
   productsView,
   sentLines,
   type StatusFilter,
   type Totals,
+  unsentNote,
+  unsentUnits,
 } from '../lib/catalog/adminView';
-import { formatSavedAt, signed, toMoney } from '../lib/catalog/text';
+import { formatDay, formatSavedAt, todayKey, toMoney } from '../lib/catalog/text';
 import type { Catalog } from '../lib/catalog/types';
 import { loadDriveCatalog } from '../lib/source/drive';
 import type { CatalogSource, Round } from '../lib/source/types';
-import { AnnounceMail } from './AnnounceMail';
+import { AnnounceMail, type Kind } from './AnnounceMail';
 import { CatalogEditor } from './CatalogEditor';
 import { OrderersTable } from './OrderersTable';
 import { ProductsTable } from './ProductsTable';
@@ -63,6 +64,8 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
   const [search, setSearch] = useState('');
   const [receiving, setReceiving] = useState(false);
   const [announcing, setAnnouncing] = useState(false);
+  // Right after publishing, the message to send is the opening one; for a round already open, a reminder.
+  const [announceKind, setAnnounceKind] = useState<Kind>('reminder');
   const canMark = round.locked || round.archived;
   const receivingOn = receiving && canMark && tab === 'products';
 
@@ -181,12 +184,13 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
     }
   }
 
-  const setRound = (patch: Partial<RoundState>, question: string) =>
-    window.confirm(question) &&
+  const saveRound = (patch: Partial<RoundState>) =>
     run(async () => {
       const res = await apiPost<{ round: RoundState }>('/api/admin', { action: 'setRound', round: round.id, ...patch });
       onRoundChange(round.id, res.round);
     });
+
+  const setRound = (patch: Partial<RoundState>, question: string) => window.confirm(question) && saveRound(patch);
 
   const publish = () =>
     window.confirm(`לפרסם את הסבב "${round.name}"? המזמינים יראו אותו מיד ויוכלו להזמין.`) &&
@@ -194,6 +198,7 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
       await apiPost('/api/admin', { action: 'publishRound', round: round.id });
       onRoundChange(round.id, { draft: undefined });
       setTab('orderers');
+      setAnnounceKind('open');
       setAnnouncing(true);
       setStatus({ text: 'הסבב פורסם — המזמינים רואים אותו עכשיו. אפשר לשלוח להם הודעה במייל.' });
     });
@@ -235,46 +240,19 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
   const visibleOrderers =
     summaries?.filter((o) => matchesStatus(o, filter) && (!query || o.name.toLowerCase().includes(query))) ?? null;
 
-  const pickFilter = (f: StatusFilter) => {
-    setAnnouncing(false);
-    setTab('orderers');
-    setFilter((cur) => (cur === f && f !== 'all' ? 'all' : f));
-  };
+  const filters: [StatusFilter, string, boolean][] = [
+    ['all', 'כולם', false],
+    ['sent', 'שלחו', false],
+    ['unsent', 'לא שלחו', !round.locked && !round.archived],
+    ['changed', 'שונו אחרי שליחה', true],
+  ];
 
-  const showProducts = () => {
-    setAnnouncing(false);
-    setTab('products');
-  };
-
-  const kpi = (f: StatusFilter, label: string, value: number, warn = false) => (
-    <button
-      type="button"
-      className={'admin-kpi' + (warn && value ? ' warn' : '')}
-      aria-pressed={!announcing && tab === 'orderers' && filter === f}
-      onClick={() => pickFilter(f)}
-    >
-      <span className="t">{label}</span>
-      <span className="v">{summaries ? value : '…'}</span>
-    </button>
-  );
-
-  // What is left out of the totals: units in drafts never sent, and the net change of orders edited after sending.
-  let draftUnits = 0;
-  let drafts = 0;
-  let changedUnits = 0;
-  for (const o of summaries ?? []) {
-    if (!o.submittedAt) {
-      draftUnits += o.units;
-      if (o.units) drafts++;
-    } else if (isChangedAfterSend(o) && totals?.get(o.fileId)) changedUnits += o.units - totals.get(o.fileId)!.units;
-  }
-  const pendingNote = [
-    draftUnits && `${draftUnits} ${drafts === 1 ? 'בטיוטה' : 'בטיוטות'}`,
-    changedUnits && `${signed(changedUnits)} בשינויים`,
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  // What the sent totals don't show: units not sent yet, and units removed after sending that are still counted.
+  const pendingNote = summaries && totals ? unsentNote(unsentUnits(summaries, (o) => totals.get(o.fileId)?.units)) : '';
   const sentOnly = 'רק הזמנות שנשלחו — מה שמוזמן מהספק. טיוטות ושינויים שלא נשלחו לא נספרים.';
+  // The closing date only reminds the admin: the round stays open until it is locked by hand.
+  const today = todayKey();
+  const closingDue = open && !!round.closesOn && round.closesOn <= today;
   // A round created here can be deleted until someone orders in it (then it can only be archived).
   const canDelete = round.editable && !!summaries && summaries.every((s) => !s.units && !s.submittedAt);
   const deleteButton = canDelete && (
@@ -301,7 +279,7 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
       <>
         <section className="panel admin-status">
           <div className="admin-status-head">
-            <span className="chip chip-warn">טיוטה</span>
+            <RoundSteps round={round} receiving={false} />
             <span className="muted small">המזמינים לא רואים את הסבב עד שתפרסמו אותו.</span>
             <div className="admin-actions admin-status-actions">
               <a
@@ -336,19 +314,23 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
     <>
       <section className="panel admin-status">
         <div className="admin-status-head">
-          <span className={'chip' + (round.archived || round.locked ? ' chip-warn' : '')}>
-            {round.archived ? 'בארכיון' : round.locked ? 'נעול לשינויים' : 'פתוח להזמנות'}
-          </span>
+          <RoundSteps round={round} receiving={receivingOn || !!sum?.missingUnits} />
           <span className="muted small">
             {round.archived
               ? 'מוצג למזמינים בארכיון, לצפייה בלבד.'
               : round.locked
-                ? 'המזמינים יכולים רק לצפות.'
-                : 'המזמינים יכולים לערוך ולשלוח.'}
+                ? 'המזמינים יכולים רק לצפות. כשהסחורה מגיעה — "קבלת סחורה" בלשונית "לפי מוצרים"; בסוף — לארכיון.'
+                : 'המזמינים יכולים לערוך ולשלוח. בסוף ההזמנות — נעילת הסבב.'}
           </span>
+          {open && <ClosingDate closesOn={round.closesOn} busy={busy} onSave={(closesOn) => void saveRound({ closesOn })} />}
           <div className="admin-actions admin-status-actions">
             {round.archived ? (
-              <button type="button" className="btn-secondary btn-sm" disabled={busy} onClick={() => setRound({ archived: false }, 'להחזיר את הסבב מהארכיון?')}>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={busy}
+                onClick={() => setRound({ archived: false, locked: true }, 'להחזיר את הסבב מהארכיון? הוא יחזור להיות נעול.')}
+              >
                 החזרה מהארכיון
               </button>
             ) : (
@@ -366,9 +348,19 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
                   </button>
                 )}
                 {round.locked ? (
-                  <button type="button" className="btn-secondary btn-sm" disabled={busy} onClick={() => setRound({ locked: false }, 'לפתוח את הסבב לשינויים?')}>
-                    🔓 פתיחה מחדש
-                  </button>
+                  <>
+                    <button type="button" className="btn-secondary btn-sm" disabled={busy} onClick={() => setRound({ locked: false }, 'לפתוח את הסבב לשינויים?')}>
+                      🔓 פתיחה מחדש
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => setRound({ archived: true }, 'להעביר את הסבב לארכיון? הוא יוצג למזמינים לצפייה בלבד.')}
+                    >
+                      🗄 לארכיון
+                    </button>
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -379,47 +371,61 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
                     🔒 נעילת הסבב
                   </button>
                 )}
-                <button
-                  type="button"
-                  className="btn-secondary btn-sm"
-                  disabled={busy}
-                  onClick={() => setRound({ archived: true }, 'להעביר את הסבב לארכיון? הוא יוצג למזמינים לצפייה בלבד.')}
-                >
-                  🗄 לארכיון
-                </button>
               </>
             )}
             {deleteButton}
           </div>
         </div>
+        {closingDue && (
+          <div className="admin-closing-due" role="alert">
+            ⏰{' '}
+            {round.closesOn === today
+              ? 'היום היום האחרון להזמנות — בסוף היום צריך לנעול את הסבב.'
+              : `תאריך הסגירה (${formatDay(round.closesOn!)}) עבר והסבב עדיין פתוח — המזמינים עדיין יכולים לשנות ולשלוח. צריך לנעול אותו.`}
+          </div>
+        )}
         <div className="admin-kpis">
-          {kpi('all', 'מזמינים', count('all'))}
-          {kpi('sent', 'שלחו', count('sent'))}
-          {kpi('unsent', 'לא שלחו', count('unsent'), !round.locked && !round.archived)}
-          {kpi('changed', 'שונו אחרי שליחה', count('changed'), true)}
-          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={showProducts}>
+          <div className="admin-kpi">
+            <span className="t">שלחו הזמנה</span>
+            <span className="v">
+              {summaries ? (
+                <>
+                  {count('sent')} <span className="admin-kpi-of">מתוך {count('all')}</span>
+                </>
+              ) : (
+                '…'
+              )}
+            </span>
+          </div>
+          <div className="admin-kpi" title={sentOnly}>
             <span className="t">יחידות שנשלחו</span>
             <span className="v">{sum ? sum.units : '…'}</span>
-            {sum && pendingNote && <span className="small admin-pending">לא כולל: {pendingNote}</span>}
-          </button>
-          <button type="button" className="admin-kpi" aria-pressed={false} title={sentOnly} onClick={showProducts}>
+            {pendingNote && <span className="small admin-pending">{pendingNote}</span>}
+          </div>
+          <div className="admin-kpi" title={sentOnly}>
             <span className="t">{sum?.missingUnits ? 'לתשלום' : 'סכום'} (שנשלחו)</span>
             <span className="v">{sum ? toMoney(sum.amount) : '…'}</span>
             {sum && sum.unpricedUnits > 0 && <span className="small danger">+{sum.unpricedUnits} יח׳ ללא מחיר</span>}
-          </button>
+          </div>
           {sum && sum.missingUnits > 0 && (
-            <button type="button" className="admin-kpi warn" aria-pressed={false} onClick={showProducts}>
+            <div className="admin-kpi warn">
               <span className="t">לא הגיעו</span>
               <span className="v">{sum.missingUnits} יח׳</span>
               <span className="small muted">{toMoney(sum.missingAmount)} שלא יחויבו</span>
-            </button>
+            </div>
           )}
         </div>
         {status.text && <div className={'status' + (status.error ? ' error' : '')}>{status.text}</div>}
       </section>
 
       {announcing && !round.locked && !round.archived ? (
-        <AnnounceMail round={round} summaries={summaries} onClose={() => setAnnouncing(false)} onSignedOut={onSignedOut} />
+        <AnnounceMail
+          round={round}
+          summaries={summaries}
+          initialKind={announceKind}
+          onClose={() => setAnnouncing(false)}
+          onSignedOut={onSignedOut}
+        />
       ) : (
         <section className="panel admin-main">
           <div className="admin-toolbar">
@@ -463,16 +469,13 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
               <div className="muted">עדיין אין הזמנות בסבב הזה.</div>
             ) : (
               <>
-                {filter !== 'all' && (
-                  <div className="admin-filter-note">
-                    <span className="chip">
-                      מוצגים: {filter === 'sent' ? 'שלחו' : filter === 'unsent' ? 'לא שלחו' : 'שונו אחרי שליחה'} ({visibleOrderers.length})
-                    </span>
-                    <button type="button" className="btn-link" onClick={() => setFilter('all')}>
-                      הצג את כולם
+                <div className="admin-seg admin-filter" role="group" aria-label="סינון לפי מצב ההזמנה">
+                  {filters.map(([f, label, warn]) => (
+                    <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}>
+                      {label} <span className={'admin-filter-n' + (warn && count(f) ? ' warn' : '')}>{count(f)}</span>
                     </button>
-                  </div>
-                )}
+                  ))}
+                </div>
                 <OrderersTable
                   rows={visibleOrderers}
                   totals={totals}
@@ -497,5 +500,83 @@ export function RoundAdmin({ round, onRoundChange, onDeleted, onSignedOut }: Rou
         </section>
       )}
     </>
+  );
+}
+
+interface ClosingDateProps {
+  closesOn: string | null;
+  busy: boolean;
+  onSave: (closesOn: string | null) => void;
+}
+
+/** The planned last day for orders. It only reminds the admin to lock the round — nothing closes by itself. */
+function ClosingDate({ closesOn, busy, onSave }: ClosingDateProps) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="btn-link small"
+        title="היום האחרון להזמנות: תזכורת לנעול את הסבב (הסבב לא ננעל לבד). מופיע גם במיילים למזמינים."
+        onClick={() => {
+          setValue(closesOn ?? '');
+          setEditing(true);
+        }}
+      >
+        📅 {closesOn ? 'הזמנות עד ' + formatDay(closesOn) : 'קביעת תאריך סגירה'}
+      </button>
+    );
+  }
+
+  const save = (day: string | null) => {
+    setEditing(false);
+    if (day !== closesOn) onSave(day);
+  };
+  return (
+    <span className="admin-closing">
+      <label className="small" htmlFor="roundClosesOn">
+        הזמנות עד
+      </label>
+      <input id="roundClosesOn" type="date" value={value} min={todayKey()} onChange={(e) => setValue(e.target.value)} />
+      <button type="button" className="btn-primary btn-sm" disabled={busy || !value} onClick={() => save(value)}>
+        שמירה
+      </button>
+      {closesOn && (
+        <button type="button" className="btn-secondary btn-sm" disabled={busy} onClick={() => save(null)}>
+          הסרת התאריך
+        </button>
+      )}
+      <button type="button" className="btn-link small" onClick={() => setEditing(false)}>
+        ביטול
+      </button>
+    </span>
+  );
+}
+
+/** Where the round is in its life: draft → open → locked → receiving the goods → archive. */
+function RoundSteps({ round, receiving }: { round: Round; receiving: boolean }) {
+  const steps = [...(round.editable ? ['טיוטה'] : []), 'פתוח להזמנות', 'נעול', 'קבלת סחורה', 'ארכיון'];
+  const current = steps.indexOf(
+    round.draft
+      ? 'טיוטה'
+      : round.archived
+        ? 'ארכיון'
+        : round.locked
+          ? receiving
+            ? 'קבלת סחורה'
+            : 'נעול'
+          : 'פתוח להזמנות',
+  );
+  return (
+    <ol className="admin-steps" aria-label="שלב הסבב">
+      {steps.map((s, i) => (
+        <li key={s} className={i < current ? 'done' : undefined} aria-current={i === current ? 'step' : undefined}>
+          {i < current && '✓ '}
+          {s}
+        </li>
+      ))}
+    </ol>
   );
 }

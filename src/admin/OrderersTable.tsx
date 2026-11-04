@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react';
 import type { OrderDto, OrderSummary, Shortages } from '../../api/_types';
 import { ProductImage } from '../components/ProductImage';
-import { isChangedAfterSend, orderDetail, type Totals } from '../lib/catalog/adminView';
+import { isChangedAfterSend, orderDetail, unsentNote, unsentUnits, type Totals } from '../lib/catalog/adminView';
 import { missingQty, shortageIndex } from '../lib/catalog/shortages';
 import { formatSavedAt, notArrived, toMoney } from '../lib/catalog/text';
 import type { Catalog } from '../lib/catalog/types';
@@ -100,16 +100,13 @@ export function OrderersTable({ rows, totals, detail }: Props) {
       return next;
     });
 
-  const sum = { units: 0, amount: 0, missingUnits: 0, draftUnits: 0, drafts: 0 };
+  const sum = { units: 0, amount: 0, missingUnits: 0 };
   for (const o of rows) {
     sum.units += of(o)?.units ?? 0;
     sum.amount += of(o)?.amount ?? 0;
     sum.missingUnits += of(o)?.missingUnits ?? 0;
-    if (!o.submittedAt && o.units) {
-      sum.draftUnits += o.units;
-      sum.drafts++;
-    }
   }
+  const pending = unsentNote(unsentUnits(rows, (o) => of(o)?.units));
 
   if (!rows.length) return <div className="muted">אין מזמינים שמתאימים לסינון.</div>;
 
@@ -232,7 +229,7 @@ export function OrderersTable({ rows, totals, detail }: Props) {
               <td />
               <td className="num">
                 {sum.units}
-                {sum.draftUnits > 0 && <div className="admin-pending small">לא כולל {sum.draftUnits} {sum.drafts === 1 ? 'בטיוטה' : 'בטיוטות'}</div>}
+                {pending && <div className="admin-pending small">{pending}</div>}
               </td>
               <td className="num">
                 {toMoney(sum.amount)}

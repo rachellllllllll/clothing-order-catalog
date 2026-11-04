@@ -27,6 +27,8 @@ export interface ShortageChange extends ShortageLine {
 export interface RoundState {
   locked: boolean;
   archived: boolean;
+  /** Planned last day for orders (YYYY-MM-DD), or null. Only reminds the admin — the round is not locked automatically. */
+  closesOn: string | null;
 }
 
 export interface RoundDto extends RoundState {
@@ -106,6 +108,7 @@ export type OrderRequest =
   | { action: 'signin'; name: string; pin: string }
   | { action: 'linkSignin'; key: string }
   | { action: 'open'; round: string }
+  | { action: 'myRounds' }
   | { action: 'login'; round: string; name: string; pin: string }
   | { action: 'load' }
   | { action: 'save'; lines: OrderLine[]; baseRev: number }
@@ -171,7 +174,7 @@ export type AdminRequest =
   | { action: 'orders'; round: string }
   | { action: 'order'; round: string; fileId: string }
   | { action: 'allOrders'; round: string }
-  | { action: 'setRound'; round: string; locked?: boolean; archived?: boolean }
+  | { action: 'setRound'; round: string; locked?: boolean; archived?: boolean; closesOn?: string | null }
   | { action: 'setShortages'; round: string; changes: ShortageChange[] }
   | { action: 'rounds' }
   | { action: 'createRound'; name: string; sizes: string[] }
@@ -180,6 +183,13 @@ export type AdminRequest =
   | { action: 'uploadImage'; round: string; data: string }
   | { action: 'publishRound'; round: string }
   | { action: 'deleteRound'; round: string }
+  | {
+      action: 'importOrders';
+      round: string;
+      orders: { name: string; lines: { model: string; color: string; size: string; qty: number }[] }[];
+      /** Only `false` writes. */
+      dryRun?: boolean;
+    }
   | { action: 'members' }
   | { action: 'addMembers'; members: NewMember[] }
   | { action: 'updateMember'; id: string; name?: string; phone?: string; email?: string; active?: boolean }

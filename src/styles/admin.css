@@ -3,6 +3,11 @@
 
 .admin-home-link { margin-inline-start: auto; font-size: 14px; }
 
+/* Rounds list › the open round. */
+.admin-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 8px; font-size: 15px; }
+.admin-crumbs > span[aria-hidden] { color: #adb5bd; }
+.admin-crumbs > [aria-current] { font-weight: 700; }
+
 .admin-status,
 .admin-main {
   padding: 12px 14px;
@@ -20,29 +25,45 @@
 .admin-status-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .admin-status-actions { margin-inline-start: auto; gap: 6px; }
 
+/* Planned closing date: an inline editor in the status bar, and the reminder once the day comes. */
+.admin-closing { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.admin-closing input { padding: 3px 6px; font-size: 13px; }
+.admin-closing-due {
+  padding: 6px 10px;
+  border: 1px solid #ffc9c9;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #c92a2a;
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .admin-kpis {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 8px;
 }
 
+/* Info only: the filters are on the orderers list itself. */
 .admin-kpi {
   display: grid;
   gap: 2px;
-  justify-items: start;
-  text-align: start;
+  align-content: start;
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: #f8fafc;
-  color: var(--text);
-  font-weight: 400;
 }
-.admin-kpi:hover { border-color: var(--accent); }
-.admin-kpi[aria-pressed="true"] { border-color: var(--accent); background: var(--chip); box-shadow: inset 0 0 0 1px var(--accent); }
 .admin-kpi .t { font-size: 12px; color: var(--muted); }
 .admin-kpi .v { font-size: 18px; font-weight: 700; }
+.admin-kpi .admin-kpi-of { font-size: 13px; font-weight: 400; color: var(--muted); }
 .admin-kpi.warn .v { color: var(--warn); }
+
+/* The round's life, with the current step marked. */
+.admin-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.admin-steps li { color: var(--muted); white-space: nowrap; }
+.admin-steps li + li::before { content: '‹'; margin-inline-end: 4px; color: #adb5bd; }
+.admin-steps li[aria-current] { padding: 2px 9px; border-radius: 999px; background: var(--chip); color: #155e75; font-weight: 700; }
 
 /* Units not sent yet (drafts, changes since sending): shown beside the sent totals, never counted in them. */
 .admin-pending { color: var(--muted); font-style: italic; font-weight: 400; }
@@ -75,7 +96,11 @@
   font-size: 13px;
 }
 
-.admin-filter-note { display: flex; align-items: center; gap: 6px; }
+/* `flex: none`: in the desktop flex chain the seg (overflow: hidden) would otherwise shrink to nothing under a long table. */
+.admin-filter { flex: none; justify-self: start; align-self: flex-start; flex-wrap: wrap; }
+.admin-filter-n { margin-inline-start: 2px; font-weight: 700; opacity: 0.75; }
+.admin-filter-n.warn { color: var(--warn); opacity: 1; }
+.admin-filter button[aria-pressed="true"] .admin-filter-n { color: inherit; }
 
 /* ── Tables ── */
 .admin-table-wrap { overflow: auto; }
@@ -221,13 +246,15 @@
 .admin-size { min-width: 56px; }
 .admin-size.focus { background: var(--chip) !important; }
 .admin-size-btn {
-  padding: 2px 6px;
+  min-width: 28px;
+  padding: 1px 9px;
   border: 0;
-  background: none;
-  color: var(--accent);
+  border-radius: 999px;
+  background: var(--chip);
+  color: #155e75;
   font-weight: 700;
-  text-decoration: underline dotted;
 }
+.admin-size-btn:hover { background: #d0ebff; }
 
 .admin-who-row > td { padding-top: 0; }
 /* Products: who ordered each size, listed under that size's column. */
@@ -356,33 +383,44 @@
 .mail-app-picker select { font: inherit; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 .admin-announce h3 { display: flex; gap: 6px; }
 .announce-help { margin: 0; }
-.announce-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
-.announce-edit { display: grid; gap: 8px; align-content: start; }
-.announce-edit .field { min-width: 0; }
-.announce-edit input,
-.announce-edit textarea {
-  width: 100%;
-  padding: 6px 10px;
+/* The message is edited as it will read: free text with the per-orderer parts as locked chips. */
+.announce-compose { display: grid; gap: 8px; min-width: 0; }
+.mail-editor {
+  min-width: 0;
+  min-height: 180px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fff;
   color: var(--text);
-  font: inherit;
   font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
-.announce-edit textarea { resize: vertical; min-height: 160px; }
-.announce-vars code { padding: 0 4px; border-radius: 4px; background: var(--chip); font-size: 12px; }
-.announce-preview {
-  display: grid;
-  gap: 6px;
-  align-content: start;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: #f8fafc;
+.mail-editor.single { min-height: 0; font-weight: 700; }
+.mail-editor:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.mail-chip {
+  display: inline;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--chip);
+  color: #155e75;
+  font: inherit;
+  font-weight: 600;
+  white-space: pre-wrap;
+  cursor: default;
+  user-select: all;
 }
-.announce-preview pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; }
+.mail-chip.warn { background: #fff4e6; color: var(--warn); }
+.mail-chip-note { font-weight: 400; color: var(--muted); }
+.announce-insert { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.announce-insert .mail-chip { cursor: pointer; user-select: none; }
+.announce-insert .mail-chip:hover { background: #d0ebff; }
+.announce-insert .btn-link { margin-inline-start: auto; }
+.admin-announce-table tr.announce-group > td { padding-top: 12px; color: var(--muted); font-size: 13px; font-weight: 600; }
+.admin-announce-table tr.announce-group .btn-link { color: var(--muted); font-weight: 600; }
 .admin-announce-table td { vertical-align: middle; }
 .admin-announce-table tr.selected > td { background: var(--chip); }
 .admin-announce-table .btn-link { padding: 0; font-weight: 600; color: var(--text); }
@@ -437,7 +475,7 @@ a.btn-primary { border-color: transparent; }
 .chip-x:not(:disabled):hover { color: var(--warn); }
 .chip-x:disabled { opacity: 0.3; }
 
-.catalog-editor { display: grid; gap: 10px; min-width: 0; }
+.catalog-editor { display: grid; gap: 10px; min-width: 0; container: ce / inline-size; }
 .catalog-editor[hidden] { display: none; }
 .catalog-editor .status { border-top: 0; padding: 4px 0; }
 .ce-head { display: flex; flex-wrap: wrap; align-items: end; gap: 10px 16px; }
@@ -445,6 +483,7 @@ a.btn-primary { border-color: transparent; }
 .ce-save { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .ce-dirty { color: var(--accent2); font-size: 13px; font-weight: 600; }
 .ce-title { margin-top: 6px !important; }
+.ce-restored { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px !important; border-radius: 8px; background: #fff9db; }
 
 .ce-drop {
   display: flex;
@@ -467,6 +506,7 @@ a.btn-primary { border-color: transparent; }
 .ce-table tr.selected > td { background: var(--chip); }
 .ce-table input[type="text"],
 .ce-table input[type="number"],
+.ce-table textarea,
 .ce-bulk input[type="number"] {
   padding: 5px 8px;
   border: 1px solid var(--line);
@@ -476,9 +516,15 @@ a.btn-primary { border-color: transparent; }
   font: inherit;
   font-size: 13px;
 }
-.ce-model { width: 100%; min-width: 140px; }
+/* The model name wraps and the field grows with it, so a long name is seen in full. */
+.ce-model { display: block; width: 100%; min-width: 180px; resize: none; field-sizing: content; line-height: 1.35; }
+@supports not (field-sizing: content) {
+  .ce-model { height: calc(2lh + 12px); }
+}
 .ce-model.invalid { border-color: #e03131 !important; background: #fff5f5 !important; }
-.ce-price { width: 84px; }
+.ce-price { width: 84px; -moz-appearance: textfield; appearance: textfield; }
+.ce-price::-webkit-outer-spin-button,
+.ce-price::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .ce-table .ce-price.missing { border-color: #ffd8a8; background: #fff9db; }
 .ce-notes { width: 100%; min-width: 120px; }
 
@@ -517,6 +563,55 @@ a.btn-primary { border-color: transparent; }
   user-select: none;
 }
 .ce-size[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+.ce-all { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.ce-all-label { display: none; }
+
+/* Half a screen: the columns don't fit side by side, so each product becomes a card, and the save bar stays in view. */
+@container ce (max-width: 980px) {
+  .ce-head {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    padding-block: 8px;
+    background: var(--panel);
+    box-shadow: 0 1px 0 var(--line);
+  }
+  .admin-table-wrap > .ce-table,
+  .ce-table > tbody { display: block; }
+  .ce-table > thead > tr { display: flex; }
+  .admin-table-wrap > .ce-table > thead th { position: static; box-shadow: none; border-bottom: 1px solid var(--line); flex: 1; }
+  .ce-table > thead th:not(:first-child) { display: none; }
+  .ce-all-label { display: inline; }
+  .ce-table > tbody > tr {
+    display: grid;
+    grid-template-columns: auto 64px minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "sel img model price del"
+      "sel img colors colors colors"
+      "sel img sizes sizes sizes"
+      "sel img notes notes notes";
+    gap: 6px 10px;
+    align-items: center;
+    padding: 10px 6px;
+    border-bottom: 1px solid var(--line);
+  }
+  .ce-table > tbody > tr > td { display: block; padding: 0; border: 0; background: none !important; }
+  .ce-table > tbody > tr:hover { background: #f8fafc; }
+  .ce-table > tbody > tr.selected { background: var(--chip); }
+  .ce-c-sel { grid-area: sel; align-self: start; padding-top: 4px !important; }
+  .ce-c-img { grid-area: img; align-self: start; }
+  .ce-c-model { grid-area: model; }
+  .ce-c-price { grid-area: price; }
+  .ce-c-del { grid-area: del; }
+  .ce-c-colors { grid-area: colors; }
+  .ce-c-sizes { grid-area: sizes; }
+  .ce-c-notes { grid-area: notes; }
+  .ce-model,
+  .ce-colors,
+  .ce-sizes,
+  .ce-notes { min-width: 0; }
+}
 
 /* Half a desktop screen: drop the "updated" column and let the toolbar wrap. */
 @media (max-width: 900px) {

@@ -2,7 +2,7 @@
  * Orders stored in Drive:
  *   ORDERS_FOLDER_ID/                      (private, created by the setup script)
  *     מזמינים/        the orderers list (see _members.ts)
- *     <round name>/   appProperties { round: <catalog round folder id>, locked, archived, shortages: <file id> }
+ *     <round name>/   appProperties { round: <catalog round folder id>, locked, archived, closes: <YYYY-MM-DD>, shortages: <file id> }
  *       <orderer name>.json   appProperties = summary (see summaryProps) + mid (member id) for cheap admin listing
  *       shortages.json        appProperties { kind: 'shortages' } — units that did not arrive, per order file id
  */
@@ -22,7 +22,17 @@ import {
   updateProperties,
   type AppFile,
 } from './_google.js';
-import { memberLinkLogin, memberLogin, nameKey, sessionMember, sessionStamp, type StoredMember } from './_members.js';
+import { modelKey, readAppCatalog } from './_catalog.js';
+import {
+  listMembers,
+  memberLinkLogin,
+  memberLogin,
+  nameKey,
+  parseName,
+  sessionMember,
+  sessionStamp,
+  type StoredMember,
+} from './_members.js';
 import { findAppRound, findRound, listAllRounds, type RoundRef } from './_rounds.js';
 import type {
   OrderDto,
@@ -158,7 +168,16 @@ function summaryOf(f: AppFile): OrderSummary {
 // ── Round folders ──
 
 function stateOf(folder: AppFile | null): RoundState {
-  return { locked: folder?.appProperties.locked === '1', archived: folder?.appProperties.archived === '1' };
+  const p = folder?.appProperties;
+  return { locked: p?.locked === '1', archived: p?.archived === '1', closesOn: p?.closes || null };
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A calendar day `YYYY-MM-DD` that really exists (e.g. not 2026-02-30). */
+function validDay(v: string): boolean {
+  const d = new Date(v + 'T00:00:00Z');
+  return DAY_RE.test(v) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
 }
 
 async function findRoundFolder(roundId: string): Promise<AppFile | null> {
@@ -192,7 +211,7 @@ export async function listRoundDtos(includeDrafts: boolean): Promise<RoundDto[]>
     id: r.id,
     name: r.name,
     createdTime: r.createdTime,
-    ...(states.get(r.id) ?? { locked: false, archived: false }),
+    ...(states.get(r.id) ?? { locked: false, archived: false, closesOn: null }),
     ...(r.editable && { editable: true }),
     ...(r.draft && { draft: true }),
   }));
@@ -258,14 +277,46 @@ function memberSignin({ id, member }: { id: string; member: StoredMember }): Sig
   return { name: member.name, token };
 }
 
-/** Opens the signed-in member's order in the round (`Authorization: Bearer` from `signin`). */
-export async function openOrder(request: Request, roundId: unknown): Promise<OrderResponse> {
+/** The member signed in with `signin` (`Authorization: Bearer`). */
+async function signedInMember(request: Request): Promise<{ id: string; member: StoredMember }> {
   const token = verifyToken<MemberToken>(bearerToken(request));
   if (!token || token.k !== 'member' || typeof token.m !== 'string') throw sessionExpired();
   const member = await sessionMember(token.m, token.p);
   if (!member) throw sessionExpired();
+  return { id: token.m, member };
+}
+
+/** Opens the signed-in member's order in the round (`Authorization: Bearer` from `signin`). */
+export async function openOrder(request: Request, roundId: unknown): Promise<OrderResponse> {
+  const { id, member } = await signedInMember(request);
   const round = await findRound(roundId);
-  return openMemberOrder(round, token.m, member);
+  return openMemberOrder(round, id, member);
+}
+
+/**
+ * The closed (locked/archived) rounds in which the signed-in member ordered something (or sent an order).
+ * Lets the round list hide old rounds that are of no use to them.
+ */
+export async function orderedClosedRounds(request: Request): Promise<string[]> {
+  const { id: memberId, member } = await signedInMember(request);
+  if (!ordersConfigured()) return [];
+  const folders = await findFiles(`${q(ordersRootId())} in parents and mimeType = ${q(FOLDER_MIME)} and trashed = false`);
+  const closed = folders.filter((f) => {
+    const s = stateOf(f);
+    return f.appProperties.round && (s.locked || s.archived);
+  });
+  const nk = nameKey(member.name);
+  const found = await Promise.all(
+    closed.map(async (folder) => {
+      // Orders from before the list are not linked yet: matched by name, as when opened.
+      const mine = (await orderFiles(folder.id)).filter((f) => {
+        const p = f.appProperties;
+        return p.mid ? p.mid === memberId : p.nk === nk;
+      });
+      return mine.some((f) => Number(f.appProperties.units) > 0 || !!f.appProperties.sub) ? folder.appProperties.round : null;
+    }),
+  );
+  return [...new Set(found.filter((id): id is string => !!id))];
 }
 
 /** Signs in and opens the order in the round in one step. */
@@ -486,14 +537,122 @@ export async function setShortages(roundId: unknown, rawChanges: unknown): Promi
   return { shortages: orders };
 }
 
-export async function setRoundState(roundId: unknown, patch: { locked?: unknown; archived?: unknown }): Promise<{ round: RoundState }> {
-  const round = await findRound(roundId, true);
-  const folder = await ensureRoundFolder(round);
-  const props: Record<string, string> = {};
+export async function setRoundState(
+  roundId: unknown,
+  patch: { locked?: unknown; archived?: unknown; closesOn?: unknown },
+): Promise<{ round: RoundState }> {
+  const props: Record<string, string | null> = {};
   if (typeof patch.locked === 'boolean') props.locked = patch.locked ? '1' : '0';
   if (typeof patch.archived === 'boolean') props.archived = patch.archived ? '1' : '0';
+  if (patch.closesOn === null || patch.closesOn === '') props.closes = null;
+  else if (typeof patch.closesOn === 'string' && validDay(patch.closesOn)) props.closes = patch.closesOn;
+  else if (patch.closesOn !== undefined) throw new HttpError(400, 'Invalid closing date.');
+  const round = await findRound(roundId, true);
+  const folder = await ensureRoundFolder(round);
   const updated = await updateProperties(folder.id, props);
   return { round: stateOf(updated) };
+}
+
+// ── One-time import of a round ordered outside the site (temporary) ──
+
+interface ImportLine {
+  model: string;
+  color: string;
+  size: string;
+  qty: number;
+}
+
+function parseImport(raw: unknown): { name: string; lines: ImportLine[] }[] {
+  if (!Array.isArray(raw) || !raw.length || raw.length > 200) throw new HttpError(400, 'Invalid orders.');
+  return (raw as Record<string, unknown>[]).map((o) => {
+    if (!Array.isArray(o?.lines) || o.lines.length > MAX_LINES) throw new HttpError(400, 'Invalid order lines.');
+    const lines = (o.lines as Record<string, unknown>[]).map((l): ImportLine => {
+      const model = str(l?.model, 200);
+      const color = str(l?.color ?? '', 200);
+      const size = str(l?.size, 60);
+      const qty = l?.qty;
+      if (!model || color === null || !size || typeof qty !== 'number' || !Number.isInteger(qty) || qty < 1 || qty > 9999) {
+        throw new HttpError(400, 'Invalid order line.');
+      }
+      return { model, color, size, qty };
+    });
+    return { name: parseName(o.name), lines };
+  });
+}
+
+/**
+ * Adds the orders of a round created on the admin page as sent orders. Lines come as model/color/size and are
+ * matched to the round's catalog (ignoring case, spaces and punctuation); an empty color matches a one-color product.
+ * Each order is linked to the member with the same name, if any. Names that already have an order in the round are
+ * skipped, so it can be run again. Nothing is written with `dryRun`, or while any line doesn't match the catalog.
+ */
+export async function importOrders(roundId: unknown, rawOrders: unknown, dryRun: boolean) {
+  const round = await findAppRound(roundId);
+  const input = parseImport(rawOrders);
+  const [{ catalog }, { members }, found] = await Promise.all([
+    readAppCatalog(round.folder),
+    listMembers(),
+    findRoundFolder(round.id),
+  ]);
+  const existing = found ? await orderFiles(found.id) : [];
+
+  const sizeKey = (s: string) => s.trim().toUpperCase();
+  const sizes = new Map(catalog.sizes.map((s) => [sizeKey(s), s]));
+  type Variant = { id: string; model: string; color: string; sizes: string[] };
+  const variants = new Map<string, Variant>();
+  const byModel = new Map<string, Variant[]>();
+  for (const p of catalog.products) {
+    const list = p.colors.map((c) => ({ id: p.id + '.' + c.id, model: p.model, color: c.name, sizes: p.sizes }));
+    p.colors.forEach((c, i) => variants.set(modelKey(p.model) + '|' + modelKey(c.name), list[i]));
+    byModel.set(modelKey(p.model), list);
+  }
+  const memberIds = new Map(members.map((m) => [nameKey(m.name), m.id]));
+
+  const unmatched: (ImportLine & { name: string })[] = [];
+  const outsideSizes: (ImportLine & { name: string })[] = [];
+  const orders = input.map(({ name, lines }) => {
+    const merged = new Map<string, OrderLine>();
+    for (const l of lines) {
+      const only = byModel.get(modelKey(l.model));
+      const v =
+        variants.get(modelKey(l.model) + '|' + modelKey(l.color)) ?? (!l.color.trim() && only?.length === 1 ? only[0] : undefined);
+      const size = sizes.get(sizeKey(l.size));
+      if (!v || !size) {
+        unmatched.push({ name, ...l });
+        continue;
+      }
+      if (!v.sizes.includes(size)) outsideSizes.push({ name, ...l });
+      const key = v.id + '|' + size;
+      const prev = merged.get(key);
+      if (prev) prev.qty += l.qty;
+      else merged.set(key, { id: v.id, size, qty: l.qty, model: v.model, color: v.color });
+    }
+    const nk = nameKey(name);
+    const mid = memberIds.get(nk);
+    const exists = existing.some((f) => f.appProperties.nk === nk || (mid && f.appProperties.mid === mid));
+    return { name, mid, exists, lines: [...merged.values()] };
+  });
+
+  const toWrite = unmatched.length || dryRun ? [] : orders.filter((o) => !o.exists && o.lines.length);
+  if (toWrite.length) {
+    const folder = found ?? (await ensureRoundFolder(round));
+    const now = new Date().toISOString();
+    for (let i = 0; i < toWrite.length; i += 6) {
+      await Promise.all(
+        toWrite.slice(i, i + 6).map(({ name, mid, lines }) => {
+          const o: StoredOrder = { v: 1, name, rev: 1, createdAt: now, updatedAt: now, lines, submitted: { at: now, rev: 1, lines } };
+          return createJsonFile(folder.id, name + '.json', { ...summaryProps(o), ...(mid && { mid }) }, o);
+        }),
+      );
+    }
+  }
+  return {
+    orders: orders.map((o) => ({ name: o.name, units: units(o.lines), member: !!o.mid, exists: o.exists })),
+    units: orders.reduce((s, o) => s + units(o.lines), 0),
+    unmatched,
+    outsideSizes,
+    written: toWrite.length,
+  };
 }
 
 /**

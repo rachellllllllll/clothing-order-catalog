@@ -3,7 +3,7 @@
  * personal sign-in link.
  */
 
-const LINK_NOTE = 'זה קישור אישי שמכניס ישר לחשבון שלך — אין להעביר אותו לאחרים.';
+export const LINK_NOTE = 'זה קישור אישי שמכניס ישר לחשבון שלך — אין להעביר אותו לאחרים.';
 
 /** The personal sign-in link. The key is in the fragment, so it never reaches server logs. */
 export function personalLink(key: string, roundId?: string): string {
@@ -21,11 +21,19 @@ export interface MailDraft {
   body: string;
 }
 
-/** Fills `{שם}`, `{סבב}` and `{קישור}` (the personal link with its note) in a message template. */
-export function fillTemplate(t: MailDraft, vars: { name: string; round: string; link: string }): MailDraft {
-  const fill = (s: string, withLink: boolean) =>
-    s.replace(/\{(שם|סבב|קישור)\}/g, (_, key: string) =>
-      key === 'שם' ? vars.name : key === 'סבב' ? vars.round : withLink ? linkBlock(vars.link) : vars.link,
+/**
+ * Fills `{שם}`, `{סבב}`, `{תאריך}` (the round's closing day) and `{קישור}` (the personal link with its note) in a
+ * message template. Without a closing date, body lines that mention `{תאריך}` are left out.
+ */
+export function fillTemplate(
+  t: MailDraft,
+  vars: { name: string; round: string; date: string; link: string },
+): MailDraft {
+  const fill = (s: string, body: boolean) =>
+    (body && !vars.date ? s.split('\n').filter((line) => !line.includes('{תאריך}')).join('\n') : s).replace(
+      /\{(שם|סבב|תאריך|קישור)\}/g,
+      (_, key: string) =>
+        key === 'שם' ? vars.name : key === 'סבב' ? vars.round : key === 'תאריך' ? vars.date : body ? linkBlock(vars.link) : vars.link,
     );
   return { subject: fill(t.subject, false), body: fill(t.body, true) };
 }

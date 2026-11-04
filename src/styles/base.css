@@ -21,6 +21,7 @@ body {
     radial-gradient(circle at 0 0, #e3fafc 0, transparent 30%),
     radial-gradient(circle at 100% 0, #fff4e6 0, transparent 25%),
     var(--bg);
+  background-repeat: no-repeat;
 }
 
 body.no-scroll { overflow: hidden; }

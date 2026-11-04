@@ -5,6 +5,7 @@ import { ControlsPanel } from './components/ControlsPanel';
 import { FilterBar } from './components/FilterBar';
 import { Lightbox } from './components/Lightbox';
 import { LoginPanel, OrderOpening } from './components/LoginPanel';
+import { OrderBar } from './components/OrderBar';
 import { OrderNotices } from './components/OrderNotices';
 import { RoundPicker } from './components/RoundPicker';
 import { apiPost } from './lib/api/client';
@@ -153,6 +154,7 @@ export function App() {
           round && <OrderOpening key={round.id} onBack={canSwitchRound ? closeRound : undefined} />
         ) : (
           <>
+            <OrderBar />
             <ControlsPanel allowLocalFolder={allowLocalFolder} />
             <OrderNotices />
             <FilterBar />

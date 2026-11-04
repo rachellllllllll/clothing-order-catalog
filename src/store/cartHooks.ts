@@ -1,8 +1,7 @@
 import { useMemo } from 'react';
 import { cartLines, cartTotals, withShortages, type CartTotals } from '../lib/catalog/selectors';
 import { linesKey } from '../lib/catalog/draft';
-import { buildOrderWorkbook, downloadBlob, exportFileName } from '../lib/catalog/exportOrder';
-import { safeText, toMoney } from '../lib/catalog/text';
+import { toMoney } from '../lib/catalog/text';
 import type { CartLine } from '../lib/catalog/types';
 import { isReadOnly, useOrderStore } from './orderStore';
 import { submitOrder } from './orderSync';
@@ -17,36 +16,7 @@ export function useCart(): { lines: CartLine[]; totals: CartTotals } {
   }, [catalog, qty, shortages]);
 }
 
-/** Export state + action for the controls panel (`available`: the round has an Excel file to fill in). */
-export function useExportOrder() {
-  const hasCatalog = useOrderStore((s) => !!s.catalog);
-  const available = useOrderStore((s) => !s.source || !!s.source.excelData);
-  const hasSigner = useOrderStore((s) => safeText(s.signer).length > 0);
-  const { totals } = useCart();
-
-  let disabledReason = '';
-  if (!hasCatalog) disabledReason = 'הקטלוג עדיין לא נטען';
-  else if (totals.units === 0) disabledReason = 'הסל ריק';
-  else if (!hasSigner) disabledReason = 'יש למלא שם מזמין לפני ההורדה';
-
-  async function exportOrder() {
-    const { source, catalog, qty, signer, account, setStatus } = useOrderStore.getState();
-    if (!source?.excelData || !catalog) return;
-    try {
-      const blob = await buildOrderWorkbook(source.excelData, catalog, qty, signer);
-      const name = exportFileName(source.excelName, signer);
-      downloadBlob(blob, name);
-      setStatus('קובץ ההזמנה הורד: ', false, { fileName: name, after: account ? '' : ' — שלחו אותו אליי.' });
-    } catch (err) {
-      console.error(err);
-      setStatus('שגיאה ביצירת קובץ ההזמנה: ' + (err instanceof Error ? err.message : String(err)), true);
-    }
-  }
-
-  return { exportOrder, disabledReason, available };
-}
-
-/** "Send order" state + action for a signed-in Drive order (shared by the controls panel and the cart). */
+/** "Send order" state + action for a signed-in Drive order (shared by the order bar and the cart). */
 export function useSendOrder() {
   const signedIn = useOrderStore((s) => s.source?.kind === 'drive' && !!s.account);
   const readOnly = useOrderStore(isReadOnly);

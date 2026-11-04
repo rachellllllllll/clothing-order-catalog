@@ -8,8 +8,10 @@ import { NewRoundForm } from './NewRoundForm';
 import { errText, RoundAdmin } from './RoundAdmin';
 import '../styles/admin.css';
 
-/** Leaving the open round (or the page section) drops unsaved catalog edits: ask first. */
-const canLeave = () => !unsavedCatalog.current || window.confirm('יש שינויים בקטלוג שלא נשמרו. לצאת בלי לשמור?');
+/** Leaving the open round (or the page section) with unsaved catalog edits: ask first (they are kept on this device). */
+const canLeave = () =>
+  !unsavedCatalog.current ||
+  window.confirm('יש שינויים בקטלוג שלא נשמרו. לצאת בלי לשמור?\n(הם נשארים במכשיר הזה ויוצעו שוב כשתפתחו את הסבב.)');
 
 /** Opens a round straight away when there is no real choice: a single round, or a single non-archived one. */
 function defaultRoundId(rounds: Round[]): string {
@@ -91,11 +93,18 @@ export function AdminApp() {
     setAdmin(false);
   }
 
-  const switchView = (v: View) => v !== view && canLeave() && setView(v);
+  const toRoundsList = () => {
+    if (!canLeave()) return;
+    setRoundId('');
+    setCreating(false);
+  };
+  // The rounds tab also leads back to the list from an open round.
+  const switchView = (v: View) => {
+    if (v !== view) canLeave() && setView(v);
+    else if (v === 'rounds' && (roundId || creating)) toRoundsList();
+  };
 
   const round = admin && view === 'rounds' && !creating ? rounds?.find((r) => r.id === roundId) : undefined;
-  // From an open round back to the list, also to create another round.
-  const canSwitchRound = !!rounds?.length;
 
   return (
     <div className="wrap admin">
@@ -111,16 +120,6 @@ export function AdminApp() {
             </button>
           </div>
         )}
-        {round && (
-          <span className="round-name">
-            סבב: <bdi>{round.name}</bdi>
-          </span>
-        )}
-        {round && canSwitchRound && (
-          <button type="button" className="btn-secondary btn-sm" onClick={() => canLeave() && setRoundId('')}>
-            החלפת סבב
-          </button>
-        )}
         <a className="admin-home-link" href={round ? '/?round=' + encodeURIComponent(round.id) : '/'}>
           לממשק ההזמנות ←
         </a>
@@ -130,6 +129,15 @@ export function AdminApp() {
           </button>
         )}
       </header>
+      {admin && view === 'rounds' && (round || creating) && (
+        <nav className="admin-crumbs" aria-label="מיקום">
+          <button type="button" className="btn-link" onClick={toRoundsList}>
+            כל הסבבים
+          </button>
+          <span aria-hidden="true">‹</span>
+          <span aria-current="page">{round ? <bdi>{round.name}</bdi> : 'סבב חדש'}</span>
+        </nav>
+      )}
       {admin === null ? (
         <div className="muted">טוען…</div>
       ) : !admin ? (
@@ -141,7 +149,7 @@ export function AdminApp() {
       ) : !rounds ? (
         <div className="muted">טוען סבבים…</div>
       ) : creating ? (
-        <NewRoundForm onCreated={onCreated} onCancel={() => setCreating(false)} onSignedOut={onSignedOut} />
+        <NewRoundForm rounds={rounds} onCreated={onCreated} onCancel={() => setCreating(false)} onSignedOut={onSignedOut} />
       ) : round ? (
         <RoundAdmin key={round.id} round={round} onRoundChange={onRoundChange} onDeleted={onDeleted} onSignedOut={onSignedOut} />
       ) : (

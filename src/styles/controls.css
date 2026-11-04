@@ -35,6 +35,8 @@
 
 .status.error { color: #c92a2a; }
 
+.panel > .status:first-child { border-top: 0; }
+
 /* `?preview` from the admin page: nothing is saved. */
 .preview-banner {
   border: 1px solid #ffd8a8;
@@ -47,24 +49,6 @@
   justify-content: space-between;
   gap: 8px;
 }
-
-.summary {
-  padding: 10px 14px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  border-top: 1px solid var(--line);
-}
-
-.box {
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 10px;
-  background: #f8fafc;
-}
-
-.box .t { font-size: 12px; color: var(--muted); }
-.box .v { font-size: 18px; font-weight: 700; margin-top: 2px; }
 
 /* ── Order notices (resume draft / missing items) ── */
 .notice {
@@ -92,6 +76,24 @@
   gap: 3px;
   font-size: 13px;
 }
+
+/* ── Order bar: sent / not sent yet + "send" + the last day to order (after .notice, which it extends) ── */
+.order-bar { padding: 12px 16px; }
+
+.order-bar-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+}
+
+.order-bar-text strong { font-size: 15px; }
+
+.order-bar-due { font-weight: 600; }
+
+.order-bar-pending { border-color: #ffd8a8; background: #fff9db; color: #8a4b08; }
+
+.order-bar-sent { border-color: #b2f2bb; background: #ebfbee; color: var(--ok); }
 
 /* ── Header + order round picker ── */
 .app-header {
@@ -138,6 +140,7 @@
 .round-card:hover:not(:disabled) { border-color: var(--accent); background: #f3fbfc; }
 
 .round-archived { background: #f8f9fa; }
+.round-muted strong, .round-muted .muted { opacity: 0.65; }
 
 .round-chip { margin-inline-start: 8px; font-size: 12px; vertical-align: middle; }
 
@@ -187,10 +190,6 @@
 .send-status { font-size: 14px; font-weight: 600; }
 .send-status.sent { color: var(--ok); }
 .send-status.pending { color: #b35c00; }
-
-@media (max-width: 900px) {
-  .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 
 /* ── Filter bar (sticky top bar) ── */
 .filter-bar {

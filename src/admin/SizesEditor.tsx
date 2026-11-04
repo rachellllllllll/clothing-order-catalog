@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { SIZE_PRESETS, sizeLabel } from '../lib/catalog/catalogDoc';
+import { MAX_SIZE_LENGTH, SIZE_PRESETS, sizeLabel, sortSizes } from '../lib/catalog/catalogDoc';
 
 interface SizesEditorProps {
   sizes: string[];
@@ -8,20 +8,34 @@ interface SizesEditorProps {
   lockedReason?: (size: string) => string | null;
 }
 
-/** The round's size list: quick sets (adults / babies / kids / numbers), free text, and removable chips. */
+/** The round's size list (kept in the usual order): quick sets (adults / babies / kids / numbers), free text, and removable chips. */
 export function SizesEditor({ sizes, onChange, lockedReason }: SizesEditorProps) {
   const [text, setText] = useState('');
+  const [note, setNote] = useState('');
 
   const add = (list: string[]) => {
     const out = [...sizes];
-    for (const s of list.map(sizeLabel)) if (s && s.length <= 20 && !out.includes(s)) out.push(s);
-    onChange(out);
+    for (const s of list) if (!out.includes(s)) out.push(s);
+    onChange(sortSizes(out));
   };
   const remove = (list: string[]) => onChange(sizes.filter((s) => !list.includes(s) || lockedReason?.(s)));
 
+  /** Adds the comma-separated sizes; too long ones stay in the field to be fixed. */
   function addText() {
-    add(text.split(','));
-    setText('');
+    const parts = text.split(',').filter((s) => sizeLabel(s));
+    const tooLong = parts.filter((s) => sizeLabel(s).length > MAX_SIZE_LENGTH);
+    const ok = parts.filter((s) => !tooLong.includes(s)).map(sizeLabel);
+    const existing = ok.filter((s) => sizes.includes(s));
+    add(ok);
+    setText(tooLong.map((s) => s.trim()).join(', '));
+    setNote(
+      [
+        tooLong.length && `מידה יכולה להיות עד ${MAX_SIZE_LENGTH} תווים — קצרו אותה בשדה.`,
+        existing.length && `כבר קיימות: ${existing.join(', ')}.`,
+      ]
+        .filter(Boolean)
+        .join(' '),
+    );
   }
 
   return (
@@ -49,7 +63,10 @@ export function SizesEditor({ sizes, onChange, lockedReason }: SizesEditorProps)
             value={text}
             placeholder="מידות נוספות, למשל: 36, 38, ONE SIZE"
             aria-label="הוספת מידות"
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              setNote('');
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
@@ -62,6 +79,7 @@ export function SizesEditor({ sizes, onChange, lockedReason }: SizesEditorProps)
           </button>
         </span>
       </div>
+      {note && <div className="small warn-text">{note}</div>}
       <div className="sizes-chips">
         {sizes.length ? (
           sizes.map((s) => {

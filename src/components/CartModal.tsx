@@ -5,6 +5,7 @@ import type { CartLine } from '../lib/catalog/types';
 import { useCart, useSendOrder } from '../store/cartHooks';
 import { useImage } from '../store/hooks';
 import { isReadOnly, useOrderStore } from '../store/orderStore';
+import { useOrderStatus } from './OrderBar';
 import { PrintArea } from './PrintArea';
 import { ProductImage } from './ProductImage';
 
@@ -56,7 +57,8 @@ export function CartModal() {
   const clearAll = useOrderStore((s) => s.clearAll);
   const readOnly = useOrderStore(isReadOnly);
   const { lines, totals } = useCart();
-  const send = useSendOrder();
+  const { send, canSend } = useOrderStatus();
+  const showSend = send.signedIn && !readOnly && canSend;
   const [printing, setPrinting] = useState(false);
 
   useEffect(() => {
@@ -96,8 +98,58 @@ export function CartModal() {
       <div className="cart-modal" role="dialog" aria-label="סל קניות">
         <div className="cart-modal-header">
           <h2>סל קניות</h2>
-          <div className="cart-modal-actions">
-            {send.signedIn && (
+          <button type="button" className="btn-secondary" onClick={() => setCartOpen(false)}>
+            ✕ סגור
+          </button>
+        </div>
+        <CartStatus />
+        <div className="cart-body">
+          <div className="cart-list">
+            {byModel.size === 0 ? (
+              <div className="muted cart-empty">
+                {readOnly ? 'הסל ריק.' : 'הסל ריק. כדי להוסיף פריט, בחרו מידה וכמות (+) בכרטיס המוצר בקטלוג.'}
+              </div>
+            ) : (
+              Array.from(byModel, ([model, modelLines]) => <CartGroup key={model} model={model} lines={modelLines} />)
+            )}
+          </div>
+          {totals.units > 0 && (
+            <div className="cart-extra-actions">
+              <button type="button" className="btn-secondary btn-sm" onClick={() => setPrinting(true)}>
+                🖨 הדפסה
+              </button>
+              {!readOnly && (
+                <button type="button" className="btn-secondary btn-sm" onClick={onEmpty}>
+                  🗑 ריקון הסל
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        {(totals.units > 0 || showSend) && (
+          <div className="cart-footer">
+            {totals.units > 0 ? (
+              <div className="cart-total">
+                <span>
+                  סה״כ: <strong>{totals.units === 1 ? 'יחידה אחת' : `${totals.units} יחידות`}</strong>
+                  {totals.missingUnits > 0 && ` (${notArrived(totals.missingUnits)})`}
+                </span>
+                <span>
+                  לתשלום:{' '}
+                  <strong>
+                    <bdi>{toMoney(totals.amount)}</bdi>
+                  </strong>
+                </span>
+                {totals.unpricedUnits > 0 && (
+                  <span className="muted cart-total-note">
+                    לא כולל {totals.unpricedUnits === 1 ? 'יחידה אחת' : `${totals.unpricedUnits} יחידות`} ללא מחיר
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="muted cart-total">הסל ריק — שליחת עדכון תבטל את ההזמנה ששלחת.</span>
+            )}
+            {showSend && (
               <button
                 type="button"
                 className="btn-primary"
@@ -108,28 +160,8 @@ export function CartModal() {
                 {send.label}
               </button>
             )}
-            {!readOnly && (
-              <button type="button" className="btn-secondary" disabled={totals.units === 0} onClick={onEmpty}>
-                🗑 רוקן סל
-              </button>
-            )}
-            <button type="button" className="btn-secondary" onClick={() => setPrinting(true)}>
-              🖨 הדפס
-            </button>
-            <button type="button" className="btn-secondary" onClick={() => setCartOpen(false)}>
-              ✕ סגור
-            </button>
           </div>
-        </div>
-        {send.signedIn && <SendStatus />}
-        <SaveStatusText />
-        <div className="cart-list">
-          {byModel.size === 0 ? (
-            <div className="muted">הסל ריק.</div>
-          ) : (
-            Array.from(byModel, ([model, modelLines]) => <CartGroup key={model} model={model} lines={modelLines} />)
-          )}
-        </div>
+        )}
       </div>
       {printing && <PrintArea />}
     </div>
@@ -140,6 +172,7 @@ function CartGroup({ model, lines }: { model: string; lines: CartLine[] }) {
   const modelKey = normalizeText(model);
   const image = useImage(modelKey);
   const removeLine = useOrderStore((s) => s.removeLine);
+  const changeQty = useOrderStore((s) => s.changeQty);
   const readOnly = useOrderStore(isReadOnly);
   const units = lines.reduce((s, l) => s + l.qty, 0);
   const missing = lines.reduce((s, l) => s + (l.missing ?? 0), 0);
@@ -163,9 +196,13 @@ function CartGroup({ model, lines }: { model: string; lines: CartLine[] }) {
         {lines.map((l) => (
           <div className={'cart-group-row' + (l.missing ? ' short' : '')} key={l.itemId + '|' + l.size}>
             <span className="chip">{l.color}</span>
-            <span>
-              {l.size} × {l.qty}
-            </span>
+            {readOnly ? (
+              <span>
+                {l.size} × {l.qty}
+              </span>
+            ) : (
+              <span className="cart-row-size">{l.size}</span>
+            )}
             {!!l.missing && (
               <span className="chip chip-short">
                 {l.missing < l.qty
@@ -174,6 +211,24 @@ function CartGroup({ model, lines }: { model: string; lines: CartLine[] }) {
                     ? 'לא הגיע מהספק'
                     : 'כל היחידות לא הגיעו מהספק'}
               </span>
+            )}
+            {!readOnly && (
+              <div className="counter">
+                <button
+                  type="button"
+                  aria-label={`הפחת ${l.size}`}
+                  // At 1, removing goes through removeLine so the "undo" toast appears.
+                  onClick={() => (l.qty > 1 ? changeQty(l.itemId, l.size, -1) : removeLine(l.itemId, l.size))}
+                >
+                  -
+                </button>
+                <span className="qty" aria-label={`כמות ${l.size}`}>
+                  {l.qty}
+                </span>
+                <button type="button" aria-label={`הוסף ${l.size}`} onClick={() => changeQty(l.itemId, l.size, 1)}>
+                  +
+                </button>
+              </div>
             )}
             <span className="row-price">
               {l.subtotal == null ? 'ללא מחיר' : toMoney(l.subtotal)}
@@ -225,15 +280,16 @@ export function RemovedToast() {
   );
 }
 
-/** Save state line inside the cart modal (the floating indicator is hidden behind the overlay). */
-function SaveStatusText() {
+/** One status line at the top of the cart: sent / unsent changes (signed in), or the local save state. */
+function CartStatus() {
   const save = useOrderStore((s) => s.save);
-  const signedIn = useOrderStore((s) => !!s.account);
   const sync = useOrderStore((s) => s.sync);
-  if (signedIn) {
-    if (sync.status === 'error') return <div className="muted danger">⚠ לא נשמר: {sync.error}</div>;
-    if (!sync.savedAt) return null;
-    return <div className="muted save-ok">✓ נשמר אוטומטית · עודכן {formatSavedAt(sync.savedAt)}</div>;
+  const readOnly = useOrderStore(isReadOnly);
+  const { send, state, title } = useOrderStatus();
+  if (send.signedIn) {
+    if (sync.status === 'error') return <div className="send-status danger">⚠ לא נשמר: {sync.error}</div>;
+    if (readOnly || state === 'empty') return null;
+    return <div className={'send-status ' + state}>{title}</div>;
   }
   if (save.failed) return <div className="muted danger">⚠ השמירה במכשיר נכשלה — הורידו את קובץ ההזמנה כדי לא לאבד אותה.</div>;
   if (!save.savedAt) return null;
@@ -244,23 +300,13 @@ function SaveStatusText() {
   );
 }
 
-/** "Sent on …" / "changes not sent yet" for a signed-in Drive order. */
-export function SendStatus() {
-  const { submitted, unsent } = useSendOrder();
-  if (!submitted) return <div className="send-status pending">ההזמנה עדיין לא נשלחה.</div>;
-  return (
-    <div className={'send-status' + (unsent ? ' pending' : ' sent')}>
-      ✓ ההזמנה נשלחה {formatSavedAt(submitted.at)}
-      {unsent && ' · ⚠ יש שינויים שלא נשלחו'}
-    </div>
-  );
-}
-
 /** Small "saved" pill next to the floating cart button; pulses on every save. */
 export function SaveIndicator() {
   const save = useOrderStore((s) => s.save);
   const signedIn = useOrderStore((s) => !!s.account);
   const sync = useOrderStore((s) => s.sync);
+  const { unsent, submitted } = useSendOrder();
+  const { totals } = useCart();
   if (signedIn) {
     if (sync.status === 'saving') return <div className="save-indicator save-busy">שומר…</div>;
     if (sync.status === 'error') {
@@ -271,9 +317,17 @@ export function SaveIndicator() {
       );
     }
     if (sync.status !== 'saved' || !sync.savedAt) return null;
+    // "Saved" alone reads as "done": say when the saved order still has to be sent.
+    if (unsent && (totals.units > 0 || submitted)) {
+      return (
+        <div key={sync.savedAt} className="save-indicator save-unsent" title={'עודכן ' + formatSavedAt(sync.savedAt)}>
+          נשמר · עוד לא נשלח
+        </div>
+      );
+    }
     return (
       <div key={sync.savedAt} className="save-indicator" title={'עודכן ' + formatSavedAt(sync.savedAt)}>
-        נשמר ✓
+        {submitted ? 'נשלח ✓' : 'נשמר ✓'}
       </div>
     );
   }

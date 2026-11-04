@@ -158,10 +158,21 @@ function roundName(raw: unknown): string {
   return name;
 }
 
+/** Same as roundNameKey on the client: two rounds can't share a name (it is how admins and orderers tell them apart). */
+export const roundNameKey = (name: string) => name.replace(/\s+/g, ' ').trim().toLowerCase();
+
+async function assertNameFree(name: string, exceptId?: string): Promise<void> {
+  const key = roundNameKey(name);
+  if ((await listAppRounds()).some((f) => f.id !== exceptId && roundNameKey(f.name) === key)) {
+    throw new HttpError(409, `כבר יש סבב בשם "${name}" — בחרו שם אחר.`, 'name_taken');
+  }
+}
+
 /** A new round starts as a draft with an empty catalog. */
 export async function createAppRound(rawName: unknown, rawSizes: unknown): Promise<AppFile> {
   const name = roundName(rawName);
   const doc: CatalogDoc = { v: 1, sizes: parseSizes(rawSizes), products: [] };
+  await assertNameFree(name);
   const root = await ensureCatalogRoot();
   const folder = await createFolder(name, root.id, { kind: 'round', draft: '1' });
   await createJsonFile(folder.id, CATALOG_FILE, { kind: 'catalog', rev: '1' }, doc);
@@ -225,6 +236,7 @@ export async function saveAppCatalog(
     throw new HttpError(409, 'הקטלוג נשמר בינתיים מחלון אחר — טענו אותו מחדש.', 'conflict');
   }
   const doc = parseCatalogDoc(raw, new Set(current.images.map((f) => f.id)));
+  if (name !== folder.name) await assertNameFree(name, folder.id);
   const next = current.rev + 1;
   if (current.file) await updateJsonFile(current.file.id, { kind: 'catalog', rev: String(next) }, doc);
   else await createJsonFile(folder.id, CATALOG_FILE, { kind: 'catalog', rev: String(next) }, doc);

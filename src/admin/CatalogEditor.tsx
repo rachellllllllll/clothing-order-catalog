@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CatalogDoc, DocCatalogResponse, DocProduct, ImageUrls, OrderDto } from '../../api/_types';
 import { ApiError, apiPost } from '../lib/api/client';
 import { docItemId, newId } from '../lib/catalog/catalogDoc';
-import { normalizeText } from '../lib/catalog/text';
+import { formatSavedAt, normalizeText } from '../lib/catalog/text';
 import type { Round } from '../lib/source/types';
 import { SizesEditor } from './SizesEditor';
 
@@ -16,6 +16,58 @@ const IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp';
 
 const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 const isImage = (f: File) => /^image\/(jpeg|png|webp)$/.test(f.type) || /\.(jpe?g|png|webp)$/i.test(f.name);
+
+const BACKUP_KEY = 'orderUi:catalogBackup:';
+
+/**
+ * Unsaved changes, kept on this device until they are saved: they survive a closed tab, a reload, leaving the
+ * round, or an admin session that expired in the middle of the work.
+ */
+interface Backup {
+  /** The catalog revision the changes were made on. */
+  rev: number;
+  name: string;
+  doc: CatalogDoc;
+  at: string;
+}
+
+function readBackup(roundId: string): Backup | null {
+  try {
+    const b = JSON.parse(localStorage.getItem(BACKUP_KEY + roundId) ?? 'null') as Partial<Backup> | null;
+    const ok =
+      !!b &&
+      typeof b.rev === 'number' &&
+      typeof b.name === 'string' &&
+      typeof b.at === 'string' &&
+      b.doc?.v === 1 &&
+      Array.isArray(b.doc.sizes) &&
+      Array.isArray(b.doc.products);
+    return ok ? (b as Backup) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBackup(roundId: string, backup: Backup | null) {
+  try {
+    if (backup) localStorage.setItem(BACKUP_KEY + roundId, JSON.stringify(backup));
+    else localStorage.removeItem(BACKUP_KEY + roundId);
+  } catch {
+    // Storage full or blocked: only the copy in the page is kept.
+  }
+}
+
+/** Adds the urls of images that were uploaded but never saved in the catalog (a restored backup may use them). */
+function withImages(images: Record<string, ImageUrls>, doc: CatalogDoc): Record<string, ImageUrls> {
+  const out = { ...images };
+  for (const p of doc.products) {
+    if (p.image && !out[p.image]) {
+      const url = '/api/image?id=' + encodeURIComponent(p.image);
+      out[p.image] = { thumb: url, full: url };
+    }
+  }
+  return out;
+}
 
 async function prepareImage(file: File): Promise<{ base64: string; blob: Blob }> {
   let bitmap: ImageBitmap;
@@ -92,6 +144,8 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Unsaved changes found on this device when the catalog loaded: applied, or (saved elsewhere since) only offered.
+  const [restored, setRestored] = useState<{ backup: Backup; applied: boolean } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const replaceTarget = useRef<string | null>(null);
   const lastSizeClick = useRef<{ product: string; index: number } | null>(null);
@@ -108,10 +162,15 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
   const load = useCallback(async () => {
     try {
       const res = await apiPost<DocCatalogResponse & { rev: number }>('/api/admin', { action: 'catalog', round: round.id });
-      setDoc(res.catalog);
-      setImages(res.images);
-      setName(res.round.name);
-      setSaved({ rev: res.rev, json: JSON.stringify(res.catalog), name: res.round.name });
+      const json = JSON.stringify(res.catalog);
+      const backup = readBackup(round.id);
+      const pending = backup && (JSON.stringify(backup.doc) !== json || backup.name !== res.round.name) ? backup : null;
+      const apply = !!pending && pending.rev === res.rev;
+      setDoc(apply ? pending.doc : res.catalog);
+      setImages(apply ? withImages(res.images, pending.doc) : res.images);
+      setName(apply ? pending.name : res.round.name);
+      setSaved({ rev: res.rev, json, name: res.round.name });
+      setRestored(pending && { backup: pending, applied: apply });
       setSelected(new Set());
       setConflict(false);
       setStatus({ text: '' });
@@ -138,6 +197,33 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty, onDirtyChange]);
   useEffect(() => () => void (unsavedCatalog.current = false), []);
+
+  // While a backup from before is only offered, it stays as it is until the admin chooses.
+  useEffect(() => {
+    if (!doc || !saved || (restored && !restored.applied)) return;
+    const untouched = restored && doc === restored.backup.doc && name === restored.backup.name;
+    const at = untouched ? restored.backup.at : new Date().toISOString();
+    writeBackup(round.id, dirty ? { rev: saved.rev, name, doc, at } : null);
+  }, [round.id, doc, name, saved, dirty, restored]);
+
+  function applyBackup() {
+    if (!restored) return;
+    const { backup } = restored;
+    setDoc(backup.doc);
+    setName(backup.name);
+    setImages((m) => withImages(m, backup.doc));
+    setRestored({ backup, applied: true });
+  }
+
+  function discardBackup() {
+    if (!saved || !restored) return;
+    if (restored.applied) {
+      if (!window.confirm('למחוק את השינויים שלא נשמרו ולחזור למה שנשמר?')) return;
+      setDoc(JSON.parse(saved.json) as CatalogDoc);
+      setName(saved.name);
+    }
+    setRestored(null);
+  }
 
   // What was ordered (in drafts or sent orders): such items and sizes stay, so no order line loses its product.
   const ordered = useMemo(() => {
@@ -367,6 +453,7 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
       setSaved({ rev: res.rev, json: JSON.stringify(clean), name: res.name });
       setDoc((d) => (d === sent ? clean : d));
       setName((n) => (n === sentName ? res.name : n));
+      setRestored(null);
       setStatus({ text: 'הקטלוג נשמר.' });
       onSaved(res.name);
     } catch (err) {
@@ -436,6 +523,28 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
         </div>
       </div>
       {status.text && <div className={'status' + (status.error ? ' error' : '')}>{status.text}</div>}
+      {restored && (
+        <div className="status ce-restored">
+          {restored.applied ? (
+            <span>
+              שוחזרו שינויים שלא נשמרו (שינוי אחרון {formatSavedAt(restored.backup.at)}) — הם עדיין לא נשמרו בשרת, לחצו "שמירה".
+            </span>
+          ) : (
+            <>
+              <span>
+                יש במכשיר הזה שינויים שלא נשמרו (שינוי אחרון {formatSavedAt(restored.backup.at)}), אבל הקטלוג נשמר מאז ממקום
+                אחר.
+              </span>
+              <button type="button" className="btn-secondary btn-sm" onClick={applyBackup}>
+                שחזור (יחליף את מה שנשמר מאז)
+              </button>
+            </>
+          )}
+          <button type="button" className="btn-link" onClick={discardBackup}>
+            {restored.applied ? 'ביטול השחזור' : 'מחיקת השינויים'}
+          </button>
+        </div>
+      )}
 
       <h3 className="ce-title">מידות בסבב</h3>
       <SizesEditor
@@ -493,8 +602,10 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                 type="number"
                 min={0}
                 step="0.01"
+                inputMode="decimal"
                 className="ce-price"
                 placeholder="מחיר"
+                onWheel={(e) => e.currentTarget.blur()}
                 aria-label="מחיר לנבחרים"
                 value={bulkPrice}
                 onChange={(e) => setBulkPrice(e.target.value)}
@@ -523,21 +634,24 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
             <thead>
               <tr>
                 <th>
-                  <input
-                    type="checkbox"
-                    aria-label="בחירת הכל"
-                    checked={allSelected}
-                    onChange={() =>
-                      setSelected((s) => {
-                        const next = new Set(s);
-                        for (const p of visible) {
-                          if (allSelected) next.delete(p.id);
-                          else next.add(p.id);
-                        }
-                        return next;
-                      })
-                    }
-                  />
+                  <label className="ce-all">
+                    <input
+                      type="checkbox"
+                      aria-label="בחירת הכל"
+                      checked={allSelected}
+                      onChange={() =>
+                        setSelected((s) => {
+                          const next = new Set(s);
+                          for (const p of visible) {
+                            if (allSelected) next.delete(p.id);
+                            else next.add(p.id);
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                    <span className="ce-all-label">בחירת הכל</span>
+                  </label>
                 </th>
                 <th>תמונה</th>
                 <th>דגם</th>
@@ -559,7 +673,7 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                 const locked = productOrdered(p);
                 return (
                   <tr key={p.id} className={selected.has(p.id) ? 'selected' : undefined}>
-                    <td>
+                    <td className="ce-c-sel">
                       <input
                         type="checkbox"
                         aria-label={'בחירת ' + (p.model || 'מוצר')}
@@ -574,7 +688,7 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                         }
                       />
                     </td>
-                    <td>
+                    <td className="ce-c-img">
                       <button
                         type="button"
                         className={'ce-img' + (up === 'error' ? ' error' : '')}
@@ -597,18 +711,21 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                         )}
                       </button>
                     </td>
-                    <td>
-                      <input
-                        type="text"
+                    <td className="ce-c-model">
+                      {/* Wraps (and grows) so a long model name is seen in full; it stays one line of text. */}
+                      <textarea
+                        rows={1}
                         className={'ce-model' + (dup || !p.model.trim() ? ' invalid' : '')}
                         value={p.model}
                         maxLength={120}
                         placeholder="שם הדגם"
+                        aria-label="שם הדגם"
                         title={dup ? 'הדגם הזה מופיע פעמיים' : undefined}
-                        onChange={(e) => update(p.id, () => ({ model: e.target.value }))}
+                        onKeyDown={(e) => e.key === 'Enter' && e.preventDefault()}
+                        onChange={(e) => update(p.id, () => ({ model: e.target.value.replace(/\s*[\r\n]+\s*/g, ' ') }))}
                       />
                     </td>
-                    <td>
+                    <td className="ce-c-colors">
                       <ColorsCell
                         product={p}
                         isOrdered={(colorId) => ordered.has(docItemId(p, colorId))}
@@ -617,20 +734,23 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                         onRename={(colorId, current) => renameColor(p, colorId, current)}
                       />
                     </td>
-                    <td>
+                    <td className="ce-c-price">
                       <input
                         type="number"
                         min={0}
                         step="0.01"
+                        inputMode="decimal"
                         className={'ce-price' + (p.price == null ? ' missing' : '')}
+                        onWheel={(e) => e.currentTarget.blur()}
                         value={p.price ?? ''}
-                        placeholder="—"
+                        placeholder="מחיר"
+                        aria-label="מחיר ($)"
                         onChange={(e) =>
                           update(p.id, () => ({ price: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) }))
                         }
                       />
                     </td>
-                    <td>
+                    <td className="ce-c-sizes">
                       {doc.sizes.length ? (
                         <div className={'ce-sizes' + (p.sizes.length ? '' : ' invalid')}>
                           {doc.sizes.map((s, i) => (
@@ -652,16 +772,18 @@ export function CatalogEditor({ round, hidden, orders, onSaved, onDirtyChange, o
                         <span className="muted small">הוסיפו מידות לסבב (למעלה)</span>
                       )}
                     </td>
-                    <td>
+                    <td className="ce-c-notes">
                       <input
                         type="text"
                         className="ce-notes"
                         value={p.notes}
                         maxLength={500}
+                        placeholder="הערות"
+                        aria-label="הערות"
                         onChange={(e) => update(p.id, () => ({ notes: e.target.value }))}
                       />
                     </td>
-                    <td>
+                    <td className="ce-c-del">
                       <button
                         type="button"
                         className="btn-link"

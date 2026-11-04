@@ -2,7 +2,16 @@ import { adminLogin, clearAdminCookie, isAdmin, noStoreJson, readJsonBody, requi
 import { createAppRound, publishAppRound, readAppCatalog, saveAppCatalog, uploadImage } from './_catalog.js';
 import { errorResponse, HttpError } from './_drive.js';
 import { addMembers, deleteMember, listMembers, loginLinks, newCode, pastOrderers, updateMember } from './_members.js';
-import { adminOrder, allOrders, deleteRound, listOrders, listRoundDtos, setRoundState, setShortages } from './_orders.js';
+import {
+  adminOrder,
+  allOrders,
+  deleteRound,
+  importOrders,
+  listOrders,
+  listRoundDtos,
+  setRoundState,
+  setShortages,
+} from './_orders.js';
 import { findAppRound } from './_rounds.js';
 
 /** Image uploads are sent as base64 JSON; Vercel's request limit is 4.5 MB. */
@@ -33,7 +42,9 @@ export async function POST(request: Request): Promise<Response> {
       case 'allOrders':
         return noStoreJson(await allOrders(body.round));
       case 'setRound':
-        return noStoreJson(await setRoundState(body.round, { locked: body.locked, archived: body.archived }));
+        return noStoreJson(
+          await setRoundState(body.round, { locked: body.locked, archived: body.archived, closesOn: body.closesOn }),
+        );
       case 'setShortages':
         return noStoreJson(await setShortages(body.round, body.changes));
       case 'rounds':
@@ -54,6 +65,8 @@ export async function POST(request: Request): Promise<Response> {
         return noStoreJson({ ok: true });
       case 'deleteRound':
         return noStoreJson(await deleteRound(body.round));
+      case 'importOrders':
+        return noStoreJson(await importOrders(body.round, body.orders, body.dryRun !== false));
       case 'members':
         return noStoreJson(await listMembers());
       case 'addMembers':

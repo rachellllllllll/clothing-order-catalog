@@ -48,6 +48,8 @@
 
 .save-indicator.save-busy { border-color: var(--line); color: var(--muted); animation: none; }
 
+.save-indicator.save-unsent { border-color: #ffd8a8; color: #b35c00; }
+
 .save-ok { color: var(--ok); }
 
 .fab-badge {
@@ -120,9 +122,12 @@
   border-radius: 16px;
   width: 100%;
   max-width: 700px;
+  /* Header and footer (total + send) stay visible; only the item list scrolls. */
+  max-height: calc(100dvh - 48px);
   padding: 20px;
-  display: grid;
-  gap: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
 }
 
@@ -136,9 +141,51 @@
 
 .cart-modal-header h2 { margin: 0; font-size: 20px; }
 
-.cart-modal-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.cart-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
 
 .cart-list { display: grid; gap: 10px; }
+
+.cart-empty { padding: 12px 0; }
+
+.cart-extra-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+.cart-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f1f3f5;
+}
+
+.cart-total {
+  flex: 1 1 220px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 14px;
+  font-size: 15px;
+}
+
+.cart-total-note { flex-basis: 100%; font-size: 12px; }
+
+.cart-row-size { font-weight: 600; min-width: 2.2em; text-align: center; }
+
+/* Same "- n +" order as the catalog's size boxes (which are LTR); physical margin since the box itself is LTR. */
+.cart-group-row .counter { gap: 3px; margin-right: auto; direction: ltr; }
+.cart-group-row .counter button { width: 26px; height: 26px; }
+.cart-group-row .counter .qty { display: inline-grid; place-items: center; width: 28px; height: 26px; }
+/* With a stepper, the stepper takes the free space; the price keeps a fixed column next to it. */
+.cart-group-row .counter ~ .row-price { margin-inline-start: 6px; min-width: 4.5em; text-align: end; }
 
 .cart-group {
   border: 1px solid var(--line);

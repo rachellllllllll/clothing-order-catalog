@@ -29,12 +29,6 @@ export interface RemovedLine {
   qty: number;
 }
 
-/** "You have an order you started" — shown after a saved draft was restored. */
-export interface ResumeNotice {
-  units: number;
-  updatedAt: string;
-}
-
 /** Saved/imported lines that have no matching item or size in the current catalog. */
 export interface MissingNotice {
   origin: 'draft' | 'file';
@@ -103,11 +97,15 @@ interface OrderState {
   lightbox: LightboxState | null;
   /** The last cart line removed, kept briefly so it can be undone. */
   lastRemoved: RemovedLine | null;
-  resumeNotice: ResumeNotice | null;
   missingNotice: MissingNotice | null;
   save: SaveState;
   /** Signed in with name + code (asked before the rounds are shown); kept on this device. */
   member: Account | null;
+  /**
+   * Locked/archived rounds in which the member ordered something — the round list hides archived rounds without
+   * an order. 'pending' while loading; null when unknown (no member, or the request failed): every round is shown.
+   */
+  orderedRounds: string[] | 'pending' | null;
   /** The member's order in the open round (opened with the `member` token). */
   account: Account | null;
   /** True while the member's order in the open round is being opened. */
@@ -132,10 +130,7 @@ interface OrderState {
   undoRemove(): void;
   dismissRemoved(): void;
   clearAll(): void;
-  dismissResume(): void;
-  startNewOrder(): void;
   dismissMissing(): void;
-  setSigner(signer: string): void;
   setActiveColor(modelKey: string, index: number): void;
   setSearch(search: string): void;
   setSort(sort: SortMode): void;
@@ -195,27 +190,24 @@ export function isReadOnly(s: Pick<OrderState, 'round'>): boolean {
   return !!s.round && (s.round.locked || s.round.archived);
 }
 
-export { readStorage, writeStorage, unitsOf };
+export { readStorage, writeStorage };
 
 /** A saved draft for this catalog wins; otherwise start from the quantities in the file. */
 function restoreDraft(
   catalog: Catalog,
   catalogKey: string,
-): Pick<OrderState, 'qty' | 'resumeNotice' | 'missingNotice' | 'save'> {
+): Pick<OrderState, 'qty' | 'missingNotice' | 'save'> {
   const draft = parseDraft(readStorage(draftKey(catalogKey)));
   if (!draft) {
     return {
       qty: linesToQty(catalog, catalogFileLines(catalog)).qty,
-      resumeNotice: null,
       missingNotice: null,
       save: { savedAt: null, failed: false },
     };
   }
   const { qty, missing } = linesToQty(catalog, draft.lines);
-  const units = unitsOf(qty);
   return {
     qty,
-    resumeNotice: units > 0 ? { units, updatedAt: draft.updatedAt } : null,
     missingNotice: missing.length ? { origin: 'draft', lines: missing } : null,
     save: { savedAt: draft.updatedAt, failed: false },
   };
@@ -249,10 +241,10 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
   cartOpen: false,
   lightbox: null,
   lastRemoved: null,
-  resumeNotice: null,
   missingNotice: null,
   save: { savedAt: null, failed: false },
   member: null,
+  orderedRounds: null,
   account: null,
   authPending: false,
   authNotice: null,
@@ -274,7 +266,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
       const order =
         source.kind === 'local'
           ? restoreDraft(catalog, source.catalogKey)
-          : { qty: {}, resumeNotice: null, missingNotice: null, save: { savedAt: null, failed: false } };
+          : { qty: {}, missingNotice: null, save: { savedAt: null, failed: false } };
       set({
         round: null, // openRound() sets it after a successful load
         source,
@@ -283,7 +275,8 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
         signer: source.kind === 'local' ? get().signer || firstSignature : get().signer,
         account: null,
         authPending: false,
-        authNotice: null,
+        // A failed sign-in (e.g. a bad link) may finish before the catalog loads: keep its message.
+        authNotice: get().member ? null : get().authNotice,
         sync: INITIAL_SYNC,
         conflict: null,
         shortages: [],
@@ -302,7 +295,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
                 after: ` | ${catalog.groups.length} דגמים | ${source.images.size} תמונות`,
                 isError: false,
               }
-            : { message: `${catalog.groups.length} דגמים בקטלוג`, isError: false },
+            : { message: '', isError: false },
       });
       return true;
     } catch (err) {
@@ -346,7 +339,6 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
       cartOpen: false,
       lightbox: null,
       lastRemoved: null,
-      resumeNotice: null,
       missingNotice: null,
       save: { savedAt: null, failed: false },
       account: null,
@@ -373,7 +365,6 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
       const fileSigner = imported.items.find((it) => it.signature)?.signature ?? '';
       set({
         qty,
-        resumeNotice: null,
         missingNotice: missing.length ? { origin: 'file', lines: missing } : null,
         lastRemoved: null,
         signer: get().signer || fileSigner,
@@ -423,15 +414,7 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
     if (!isReadOnly(get())) set({ qty: {}, lastRemoved: null });
   },
 
-  dismissResume: () => set({ resumeNotice: null }),
-
-  startNewOrder() {
-    if (!isReadOnly(get())) set({ qty: {}, lastRemoved: null, resumeNotice: null, missingNotice: null });
-  },
-
   dismissMissing: () => set({ missingNotice: null }),
-
-  setSigner: (signer) => set({ signer }),
 
   setActiveColor: (modelKey, index) =>
     set({ activeColorByModel: { ...get().activeColorByModel, [modelKey]: index } }),
@@ -480,8 +463,6 @@ useOrderStore.subscribe((s, prev) => {
     const ok = writeStorage(draftKey(s.source.catalogKey), JSON.stringify(draft));
     useOrderStore.setState({
       save: ok ? { savedAt: draft.updatedAt, failed: false } : { ...s.save, failed: true },
-      // Editing the restored order answers the "continue?" question.
-      resumeNotice: null,
     });
   }
   if (s.signer !== prev.signer) writeStorage(SIGNER_KEY, s.signer);

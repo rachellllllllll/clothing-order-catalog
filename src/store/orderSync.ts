@@ -8,7 +8,6 @@ import { linesKey, linesToQty, qtyToLines } from '../lib/catalog/draft';
 import {
   readBackup,
   readStorage,
-  unitsOf,
   useOrderStore,
   writeBackup,
   writeStorage,
@@ -49,11 +48,26 @@ function writeMember(member: Account | null) {
 
 set({ member: readMember() });
 
+/** Which closed rounds the member ordered in (for the round list). */
+async function loadOrderedRounds(member: Account) {
+  set({ orderedRounds: 'pending' });
+  let ordered: string[] | null = null;
+  try {
+    ordered = (await apiPost<{ ordered: string[] }>('/api/order', { action: 'myRounds' }, { token: member.token })).ordered;
+  } catch {
+    // Unknown: the list shows every round (an expired sign-in is handled when a round opens).
+  }
+  if (get().member === member) set({ orderedRounds: ordered });
+}
+
+if (typeof window !== 'undefined' && get().member) void loadOrderedRounds(get().member!);
+
 /** Ends the sign-in on this device. The local backup keeps unsaved edits; they come back after signing in again. */
 function dropMember(notice: string | null) {
   writeMember(null);
   set({
     member: null,
+    orderedRounds: null,
     account: null,
     authPending: false,
     authNotice: notice,
@@ -61,7 +75,6 @@ function dropMember(notice: string | null) {
     conflict: null,
     shortages: [],
     qty: {},
-    resumeNotice: null,
     missingNotice: null,
     lastRemoved: null,
     cartOpen: false,
@@ -229,7 +242,6 @@ function applyLogin(res: OrderResponse, token: string) {
     else conflict = { server, mine: local.lines };
   }
   const { qty, missing } = linesToQty(s.catalog, conflict ? conflict.mine : lines);
-  const units = unitsOf(qty);
 
   set({
     round,
@@ -240,7 +252,6 @@ function applyLogin(res: OrderResponse, token: string) {
     qty,
     conflict,
     missingNotice: missing.length ? { origin: 'draft', lines: missing } : null,
-    resumeNotice: units > 0 && !conflict ? { units, updatedAt: server.updatedAt } : null,
     lastRemoved: null,
     sync: { ...INITIAL_SYNC, rev: server.rev, serverKey, submitted: server.submitted, savedAt: server.updatedAt },
     shortages: res.shortages ?? [],
@@ -257,6 +268,7 @@ function applySignin(res: SigninResponse) {
   const member = { name: res.name, token: res.token };
   writeMember(member);
   set({ member, authNotice: null, signer: res.name });
+  void loadOrderedRounds(member);
   void openOrder();
 }
 
@@ -267,6 +279,17 @@ function takeLinkKey(): string | null {
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
   return key;
+}
+
+/** The member id inside a link or member token (readable without the secret) — only to compare two tokens. */
+function tokenMember(token: string): string | null {
+  try {
+    const body = token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/');
+    const m = (JSON.parse(atob(body)) as { m?: unknown }).m;
+    return typeof m === 'string' ? m : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Signs in with the personal link from the admin's mail — instead of whoever is signed in on this device. */
@@ -282,8 +305,13 @@ async function linkSignIn(key: string): Promise<void> {
     applySignin(res);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (get().member) get().setStatus(message, true);
-    else set({ authPending: false, authNotice: message });
+    const current = get().member;
+    const owner = tokenMember(key);
+    // An old link of whoever is already signed in here: they are in their own account anyway.
+    if (current && owner && tokenMember(current.token) === owner) return;
+    // Someone else is signed in on this device: don't leave the link's owner ordering in their account.
+    if (current) await saveNow();
+    dropMember(message);
   }
 }
 
@@ -334,7 +362,7 @@ export async function submitOrder(): Promise<boolean> {
       { token: s.account!.token },
     );
     applyServer(s, res);
-    get().setStatus('ההזמנה נשלחה ✓ אפשר לחזור ולעדכן אותה עד שהסבב ייסגר.');
+    get().setStatus(''); // the order bar shows it was sent
     return true;
   } catch (err) {
     handleError(s, err, lines);
