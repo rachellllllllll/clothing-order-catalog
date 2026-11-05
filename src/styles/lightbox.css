@@ -12,11 +12,14 @@
   cursor: zoom-out;
 }
 
+.lightbox-overlay:focus { outline: none; }
+
+/* Sized against the overlay (not the viewport), so the stage always fits the window. */
 .lightbox-stage {
-  width: min(1100px, 96vw);
-  height: min(94vh, 900px);
+  width: min(1100px, 100%);
+  height: min(900px, 100%);
   display: grid;
-  grid-template-rows: minmax(280px, 1fr) auto auto;
+  grid-template-rows: minmax(180px, 1fr) auto auto;
   gap: 10px;
   padding: 14px;
   background: linear-gradient(180deg, #23272e 0%, #1a1d22 100%);
@@ -28,7 +31,7 @@
 
 .lightbox-image-wrap {
   position: relative;
-  min-height: 280px;
+  min-height: 180px;
   border-radius: 12px;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.05);
@@ -36,10 +39,15 @@
   place-items: center;
 }
 
+/* Absolutely centered with max 100% of the area: the whole image is always visible, whatever
+   height the sizes panel below takes. */
 .lightbox-image-wrap img {
+  position: absolute;
+  inset: 0;
+  margin: auto;
   display: block;
   max-width: 100%;
-  max-height: 74vh;
+  max-height: 100%;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
@@ -54,6 +62,52 @@
 
 .lightbox-image-wrap.zoomed img { cursor: grab; }
 .lightbox-image-wrap.dragging img { cursor: grabbing; transition: none; }
+
+/* Until the full image arrives: the (already cached) thumbnail, slightly blurred, in its place. */
+.lightbox-image-wrap img.loading { opacity: 0; }
+
+.lightbox-image-wrap img.lightbox-placeholder {
+  width: 100%;
+  height: 100%;
+  filter: blur(6px);
+  box-shadow: none;
+  transform: scale(1.02);
+  pointer-events: none;
+}
+
+.lightbox-zoom {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+.lightbox-image-wrap:hover .lightbox-zoom,
+.lightbox-zoom:focus-within { opacity: 1; }
+
+.lightbox-zoom button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  font-size: 19px;
+  line-height: 1;
+}
+
+.lightbox-zoom button:hover,
+.lightbox-zoom button:focus-visible { background: rgba(255, 255, 255, 0.18); }
+
+.lightbox-image-wrap:not(.zoomed) .zoom-when-zoomed { opacity: 0.35; pointer-events: none; }
 
 .lightbox-zoom-hint {
   position: absolute;
@@ -154,12 +208,19 @@
   justify-content: center;
   gap: 12px;
   color: var(--text);
-  width: min(980px, 96vw);
+  width: min(980px, 100%);
+  max-height: 40vh;
+  max-height: 40dvh;
+  overflow-y: auto;
   justify-self: center;
   background: rgba(255, 255, 255, 0.96);
   border-radius: 12px;
   padding: 10px 14px;
 }
+
+.lightbox-title { display: grid; justify-items: center; gap: 2px; }
+
+.lightbox-counter { font-size: 12px; color: var(--muted, #868e96); font-variant-numeric: tabular-nums; }
 
 /* Color tabs stacked in a compact column beside the sizes */
 .lightbox-actions .color-tabs { flex: 0 0 auto; flex-direction: column; }
@@ -180,10 +241,11 @@
   gap: 8px;
   overflow-x: auto;
   padding: 2px;
-  justify-content: center;
+  justify-content: safe center;
 }
 
 .lightbox-thumb {
+  position: relative;
   width: 62px;
   height: 62px;
   padding: 0;
@@ -200,3 +262,86 @@
 }
 
 .lightbox-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+/* Same marking as the catalog cards: green frame + "✓ N" */
+.lightbox-thumb.ordered { border-color: #74c69d; }
+.lightbox-thumb.ordered.active { border-color: var(--accent2); }
+
+.lightbox-thumb-badge {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: var(--ok);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  pointer-events: none;
+}
+
+/* Windows too narrow for a side margin: the stage starts below the close button. */
+@media (max-width: 1220px) {
+  .lightbox-overlay { padding-top: 62px; }
+}
+
+/* Wide windows: a product page layout — image (+ strip under it) at the start (right), and the
+   details/sizes as a side panel, so the image keeps the full height and sizes need no scrolling. */
+@media (min-width: 1000px) {
+  .lightbox-stage {
+    width: min(1400px, 100%);
+    grid-template-columns: minmax(0, 1fr) clamp(320px, 30%, 400px);
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "image panel"
+      "strip panel";
+  }
+
+  .lightbox-image-wrap { grid-area: image; }
+  .lightbox-strip { grid-area: strip; }
+
+  .lightbox-actions {
+    grid-area: panel;
+    width: auto;
+    justify-self: stretch;
+    max-height: none;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 14px;
+    padding: 18px 16px;
+  }
+
+  .lightbox-title { justify-items: start; }
+  .lightbox-title .model-name { font-size: 21px; line-height: 1.25; }
+
+  .lightbox-actions .color-tabs { flex-direction: row; }
+  .lightbox-actions .variant { flex: none; }
+  .lightbox-actions .variant-head { justify-content: space-between; }
+  .lightbox-actions .variant-head strong { font-size: 20px; }
+
+  /* Even size grid (LTR keeps S → L order) instead of a centered wrapping row. */
+  .lightbox-actions .sizes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(94px, 1fr));
+  }
+}
+
+/* Narrow windows: the stage uses the full width. */
+@media (max-width: 700px) {
+  .lightbox-overlay { padding: 62px 8px 8px; }
+  .lightbox-stage { padding: 8px; gap: 8px; }
+  .lightbox-nav { width: 48px; }
+  .lightbox-nav::after { width: 36px; height: 36px; }
+  .lightbox-actions { padding: 8px 10px; }
+  .lightbox-zoom-hint { display: none; }
+}
+
+/* Short windows: smaller thumbnails and sizes panel, so the image keeps most of the height. */
+@media (max-height: 640px) {
+  .lightbox-overlay { padding-bottom: 10px; }
+  .lightbox-thumb { width: 46px; height: 46px; }
+  .lightbox-actions { max-height: 34vh; max-height: 34dvh; }
+}

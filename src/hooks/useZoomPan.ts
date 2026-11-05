@@ -152,7 +152,7 @@ export function useZoomPan(
       api.zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
     };
     const onMouseDown = (e: MouseEvent) => {
-      if (e.button !== 0 || !api.isZoomed()) return;
+      if (e.button !== 0 || !api.isZoomed() || (e.target as Element).closest('button')) return;
       e.preventDefault();
       markInteracted();
       Object.assign(s, { dragging: true, startX: e.clientX, startY: e.clientY, startTx: s.tx, startTy: s.ty });

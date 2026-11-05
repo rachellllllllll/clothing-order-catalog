@@ -443,8 +443,8 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
   stepLightbox(delta) {
     const lb = get().lightbox;
     if (!lb || !lb.models.length) return;
-    const len = lb.models.length;
-    set({ lightbox: { ...lb, index: (lb.index + delta + len) % len } });
+    const index = Math.min(lb.models.length - 1, Math.max(0, lb.index + delta));
+    if (index !== lb.index) set({ lightbox: { ...lb, index } });
   },
 
   setLightboxIndex(index) {
@@ -454,6 +454,28 @@ export const useOrderStore = create<OrderState>()((set, get) => ({
 
   closeLightbox: () => set({ lightbox: null }),
 }));
+
+// The browser's Back button closes the product view: opening it pushes a history entry, and closing it
+// in the app (✕, Esc, round switch...) pops that entry again.
+if (typeof window !== 'undefined') {
+  const LIGHTBOX_ENTRY = 'orderUiLightbox';
+  const inLightboxEntry = () => !!(history.state as Record<string, unknown> | null)?.[LIGHTBOX_ENTRY];
+  const leaveLightboxEntry = () => history.replaceState({ ...history.state, [LIGHTBOX_ENTRY]: undefined }, '');
+  // A reload (or Forward) can land on a stale entry while the view is closed.
+  if (inLightboxEntry()) leaveLightboxEntry();
+
+  useOrderStore.subscribe((s, prev) => {
+    if (s.lightbox && !prev.lightbox) history.pushState({ ...history.state, [LIGHTBOX_ENTRY]: true }, '');
+    else if (!s.lightbox && prev.lightbox && inLightboxEntry()) history.back();
+  });
+  window.addEventListener('popstate', () => {
+    if (!inLightboxEntry()) {
+      if (useOrderStore.getState().lightbox) useOrderStore.setState({ lightbox: null });
+    } else if (!useOrderStore.getState().lightbox) {
+      leaveLightboxEntry();
+    }
+  });
+}
 
 // Persist the cart per local catalog (on edits only — loading a catalog must not bump `updatedAt`),
 // and the signer name globally. Drive orders are saved by store/orderSync.ts.

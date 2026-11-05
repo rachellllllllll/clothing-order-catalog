@@ -85,7 +85,7 @@ function VariantPanel({
             </span>
           )}
         </div>
-        <strong>{toMoney(item.price)}</strong>
+        {item.price != null && <strong>{toMoney(item.price)}</strong>}
       </div>
       {!summary && (
         <div className="sizes">
